@@ -44,6 +44,19 @@ const Y_TOLERANCE = 3.2;
 /** Separación mínima en X para considerar que empieza otra columna. */
 const COLUMN_GAP = 9;
 
+/**
+ * Fragmento con forma de cifra monetaria ("-20,239,000.00", "1,349,955,553.28").
+ * Las columnas de dinero de un extracto vienen alineadas a la derecha, así que su
+ * ancho variable rompe el clustering por inicio-de-columna (dos cifras del mismo
+ * campo pueden empezar en X muy distintos). Se detectan por su forma de texto en
+ * vez de por posición.
+ */
+const MONEY_TOKEN = /^-?\d{1,3}(?:[.,]\d{3})+(?:[.,]\d{2})?$|^-?\d+[.,]\d{2}$/;
+const MONEY_HEADER_WORDS = new Set([
+  'VALOR', 'SALDO', 'DEBITO', 'DEBITOS', 'CREDITO', 'CREDITOS', 'IMPORTE', 'MONTO',
+  'DEBE', 'HABER', 'CARGO', 'CARGOS', 'ABONO', 'ABONOS',
+]);
+
 /* ------------------------------------------------------------------ */
 /* Extracción de fragmentos                                            */
 /* ------------------------------------------------------------------ */
@@ -142,6 +155,41 @@ function discoverColumns(lines: Frag[][]): number[] {
   // Se descartan columnas anecdóticas (membretes, pies de página)
   const minCount = Math.max(2, Math.floor(lines.length * 0.05));
   return clusters.filter((c) => c.count >= minCount).map((c) => Math.round(c.x * 10) / 10);
+}
+
+/**
+ * Corrige en el sitio las columnas de dinero (VALOR/SALDO/DÉBITO/CRÉDITO/...) de la
+ * matriz ya armada, usando la forma del texto en vez del clustering por X.
+ *
+ * Para cada línea de datos se buscan los fragmentos con forma de cifra monetaria y,
+ * si su cantidad coincide exactamente con la cantidad de columnas de dinero del
+ * encabezado, se asignan en orden (izquierda a derecha). Si no coincide (línea de
+ * membrete, resumen, etc.) se deja la celda tal como la dejó el clustering, sin
+ * arriesgar un mal reemplazo.
+ */
+function reassignMoneyColumns(
+  matrix: string[][],
+  lines: Frag[][],
+  headerRowIndex: number,
+  headerCells: string[],
+): void {
+  if (matrix.length !== lines.length) return; // los índices deben corresponder 1:1
+
+  const moneyColIdx = headerCells
+    .map((h, idx) => ({ norm: normalizeText(h || ''), idx }))
+    .filter(({ norm }) => MONEY_HEADER_WORDS.has(norm))
+    .map(({ idx }) => idx);
+  if (!moneyColIdx.length) return;
+
+  for (let i = headerRowIndex + 1; i < matrix.length; i++) {
+    const tokens = lines[i]
+      .filter((f) => MONEY_TOKEN.test(f.text))
+      .sort((a, b) => a.x - b.x);
+    if (tokens.length !== moneyColIdx.length) continue;
+    moneyColIdx.forEach((colIdx, k) => {
+      matrix[i][colIdx] = tokens[k].text;
+    });
+  }
 }
 
 function assignToColumns(line: Frag[], columns: number[]): string[] {
@@ -254,6 +302,8 @@ export async function readPdfBuffer(
   const headerRowIndex = opts.headerRowIndex ?? detectHeaderRow(matrix, 40);
   const headerCells = matrix[headerRowIndex] ?? [];
   const headers = headerCells.map((h, i) => (h && h.trim() ? h.trim() : 'Columna ' + (i + 1)));
+
+  reassignMoneyColumns(matrix, lines, headerRowIndex, headerCells);
 
   const headerSignature = normalizeText(headerCells.join(' '));
   const rows = matrix
