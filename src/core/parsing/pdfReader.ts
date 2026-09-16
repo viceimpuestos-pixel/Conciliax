@@ -192,6 +192,53 @@ function reassignMoneyColumns(
   }
 }
 
+/**
+ * Funde las columnas SIN encabezado (segunda, tercera... palabra de una
+ * descripción larga, que el clustering por X separó en columnas propias)
+ * hacia la columna de texto etiquetada más cercana a su izquierda.
+ *
+ * Las columnas de dinero (VALOR/SALDO/...) nunca reciben texto fundido: de lo
+ * contrario un valor limpio (ya corregido por `reassignMoneyColumns`) podría
+ * terminar con basura pegada detrás.
+ */
+function mergeUnlabeledColumns(matrix: string[][], headers: string[]): { headers: string[]; matrix: string[][] } {
+  const isPlaceholder = (h: string) => !h || /^Columna \d+$/.test(h);
+  const keepIdx: number[] = [];
+  headers.forEach((h, i) => {
+    if (!isPlaceholder(h)) keepIdx.push(i);
+  });
+  if (!keepIdx.length || keepIdx.length === headers.length) return { headers, matrix };
+
+  const isMoneyLabeled = (idx: number) => MONEY_HEADER_WORDS.has(normalizeText(headers[idx]));
+  const targetFor = new Array<number>(headers.length).fill(keepIdx[0]);
+  let last = keepIdx[0];
+  for (let i = 0; i < headers.length; i++) {
+    if (keepIdx.includes(i)) {
+      targetFor[i] = i;
+      if (!isMoneyLabeled(i)) last = i;
+    } else {
+      targetFor[i] = last;
+    }
+  }
+
+  const posInNew = new Map<number, number>();
+  keepIdx.forEach((idx, k) => posInNew.set(idx, k));
+  const newHeaders = keepIdx.map((i) => headers[i]);
+
+  const newMatrix = matrix.map((row) => {
+    const out = new Array<string>(newHeaders.length).fill('');
+    for (let i = 0; i < row.length; i++) {
+      const v = row[i];
+      if (!v) continue;
+      const target = posInNew.get(targetFor[i])!;
+      out[target] = out[target] ? out[target] + ' ' + v : v;
+    }
+    return out;
+  });
+
+  return { headers: newHeaders, matrix: newMatrix };
+}
+
 function assignToColumns(line: Frag[], columns: number[]): string[] {
   const cells = new Array<string>(columns.length).fill('');
   for (const f of line) {
@@ -300,10 +347,15 @@ export async function readPdfBuffer(
     });
 
   const headerRowIndex = opts.headerRowIndex ?? detectHeaderRow(matrix, 40);
-  const headerCells = matrix[headerRowIndex] ?? [];
-  const headers = headerCells.map((h, i) => (h && h.trim() ? h.trim() : 'Columna ' + (i + 1)));
+  let headerCells = matrix[headerRowIndex] ?? [];
+  let headers = headerCells.map((h, i) => (h && h.trim() ? h.trim() : 'Columna ' + (i + 1)));
 
   reassignMoneyColumns(matrix, lines, headerRowIndex, headerCells);
+
+  const merged = mergeUnlabeledColumns(matrix, headers);
+  matrix = merged.matrix;
+  headers = merged.headers;
+  headerCells = matrix[headerRowIndex] ?? [];
 
   const headerSignature = normalizeText(headerCells.join(' '));
   const rows = matrix
