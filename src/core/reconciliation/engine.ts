@@ -75,6 +75,12 @@ function candidatesInRange(index: AmountIndex, value: number, window: number): n
 /* Duplicados                                                          */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Sólo marca el caso clásico de duplicado accidental (EXACTAMENTE 2
+ * coincidencias). Tres o más movimientos idénticos el mismo día casi siempre
+ * son pagos recurrentes de valor fijo sin referencia propia (tasas,
+ * aranceles, PSE a entidades de gobierno), no un error de doble registro.
+ */
 function duplicateIds<T extends { id: string; date: Date | null; amount: number; description: string }>(
   rows: T[],
   extra: (r: T) => string = () => '',
@@ -93,7 +99,7 @@ function duplicateIds<T extends { id: string; date: Date | null; amount: number;
   }
   const out = new Set<string>();
   for (const list of seen.values()) {
-    if (list.length > 1) list.forEach((id) => out.add(id));
+    if (list.length === 2) list.forEach((id) => out.add(id));
   }
   return out;
 }

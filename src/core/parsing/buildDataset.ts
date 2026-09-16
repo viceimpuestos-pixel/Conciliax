@@ -128,20 +128,27 @@ function computeStats(
   };
 }
 
-/** Marca duplicados: misma fecha + mismo valor + misma descripción/documento. */
+/**
+ * Marca duplicados: misma fecha + mismo valor + misma descripción/documento.
+ *
+ * Sólo se marca el caso clásico de duplicado accidental (EXACTAMENTE 2
+ * coincidencias). Tres o más movimientos idénticos el mismo día casi siempre
+ * son pagos recurrentes de valor fijo sin referencia propia (tasas, aranceles,
+ * PSE a entidades de gobierno) — no un error de doble registro del banco.
+ * Marcarlos a todos como "duplicado" es un falso positivo casi seguro.
+ */
 function markDuplicates(keys: string[]): Set<number> {
-  const seen = new Map<string, number>();
-  const dupes = new Set<number>();
+  const groups = new Map<string, number[]>();
   keys.forEach((k, i) => {
     if (!k) return;
-    const first = seen.get(k);
-    if (first === undefined) {
-      seen.set(k, i);
-    } else {
-      dupes.add(i);
-      dupes.add(first);
-    }
+    const list = groups.get(k);
+    if (list) list.push(i);
+    else groups.set(k, [i]);
   });
+  const dupes = new Set<number>();
+  for (const list of groups.values()) {
+    if (list.length === 2) list.forEach((i) => dupes.add(i));
+  }
   return dupes;
 }
 

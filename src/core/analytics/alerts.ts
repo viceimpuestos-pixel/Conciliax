@@ -191,9 +191,11 @@ export function buildAlerts(
     if (!b) continue;
     push({
       kind: 'DUPLICADO',
-      severity: 'alta',
+      severity: 'media',
       title: 'Posible movimiento bancario duplicado',
-      detail: formatDate(b.date) + ' · ' + (b.description || 'Sin descripción'),
+      detail:
+        formatDate(b.date) + ' · ' + (b.description || 'Sin descripción') +
+        ' · Verifique si corresponde a una operación distinta con el mismo valor.',
       value: b.amount,
       date: b.date,
       bankIds: [id],
@@ -205,11 +207,12 @@ export function buildAlerts(
     if (!l) continue;
     push({
       kind: 'DUPLICADO',
-      severity: 'alta',
+      severity: 'media',
       title: 'Posible registro contable duplicado',
       detail:
         formatDate(l.date) + ' · ' + (l.thirdPartyName || 'Sin tercero') +
-        (l.documentNumber ? ' · Doc. ' + l.documentNumber : ''),
+        (l.documentNumber ? ' · Doc. ' + l.documentNumber : '') +
+        ' · Verifique si corresponde a una operación distinta con el mismo valor.',
       value: l.amount,
       date: l.date,
       bankIds: [],
