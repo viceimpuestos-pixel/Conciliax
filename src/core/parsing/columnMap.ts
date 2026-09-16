@@ -156,7 +156,7 @@ export const LEDGER_FIELDS: FieldSpec[] = [
     label: 'NIT / Identificación',
     type: 'id',
     synonyms: [
-      'NIT', 'NIT TERCERO', 'IDENTIFICACION', 'IDENTIFICACION TERCERO', 'CEDULA',
+      'NIT', 'NIT TERCERO', 'NIT ENTIDAD', 'IDENTIFICACION', 'IDENTIFICACION TERCERO', 'CEDULA',
       'CC NIT', 'DOCUMENTO TERCERO', 'ID TERCERO', 'CODIGO TERCERO', 'NUMERO IDENTIFICACION',
     ],
   },
@@ -166,7 +166,7 @@ export const LEDGER_FIELDS: FieldSpec[] = [
     type: 'text',
     synonyms: [
       'TERCERO', 'NOMBRE TERCERO', 'NOMBRE DEL TERCERO', 'RAZON SOCIAL', 'NOMBRE',
-      'CLIENTE', 'PROVEEDOR', 'BENEFICIARIO', 'DESCRIPCION TERCERO',
+      'CLIENTE', 'PROVEEDOR', 'BENEFICIARIO', 'DESCRIPCION TERCERO', 'ENTIDAD', 'NOMBRE ENTIDAD',
     ],
   },
   {
