@@ -96,7 +96,11 @@ export function DashboardPage() {
           tone="blue"
           label="Saldo según contabilidad"
           value={formatMoney(kpis.saldoContable)}
-          foot="Neto del auxiliar contable"
+          foot={
+            kpis.saldoContableEsNeto
+              ? 'Neto de movimientos (el auxiliar no trae columna de saldo)'
+              : 'Saldo final del auxiliar'
+          }
           icon={<IconFile size={13} />}
         />
         <Kpi

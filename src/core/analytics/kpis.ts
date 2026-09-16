@@ -9,8 +9,9 @@ export interface Kpis {
   /** Saldo final del extracto (columna Saldo) o neto de movimientos. */
   saldoBanco: number;
   saldoBancoEsNeto: boolean;
-  /** Saldo según contabilidad (neto de débitos - créditos del auxiliar). */
+  /** Saldo según contabilidad (saldo final del auxiliar) o neto de movimientos. */
   saldoContable: number;
+  saldoContableEsNeto: boolean;
   /** Banco - Contabilidad. */
   diferencia: number;
 
@@ -81,7 +82,17 @@ export function computeKpis(
     ? round2(ingresosBanco - egresosBanco)
     : round2(ordered[ordered.length - 1].balance as number);
 
-  const saldoContable = round2(ledger.reduce((acc, l) => acc + l.amount, 0));
+  // Saldo contable: si el auxiliar trae columna de saldo, se usa el último valor
+  // (igual que el banco). Comparar un saldo final contra un neto de período habría
+  // inflado artificialmente la diferencia cuando el auxiliar no arranca en cero.
+  const ledgerWithBalance = ledger.filter((l) => l.balance !== null && Number.isFinite(l.balance));
+  const ledgerOrdered = ledgerWithBalance
+    .slice()
+    .sort((a, b) => (a.date?.getTime() ?? 0) - (b.date?.getTime() ?? 0) || a.rowIndex - b.rowIndex);
+  const saldoContableEsNeto = ledgerOrdered.length === 0;
+  const saldoContable = saldoContableEsNeto
+    ? round2(ledger.reduce((acc, l) => acc + l.amount, 0))
+    : round2(ledgerOrdered[ledgerOrdered.length - 1].balance as number);
 
   let conciliados = 0;
   let probables = 0;
@@ -144,6 +155,7 @@ export function computeKpis(
     saldoBanco,
     saldoBancoEsNeto,
     saldoContable,
+    saldoContableEsNeto,
     diferencia: round2(saldoBanco - saldoContable),
     totalMovBanco: bank.length,
     totalMovContable: ledger.length,
