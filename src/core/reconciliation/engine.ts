@@ -81,7 +81,7 @@ function candidatesInRange(index: AmountIndex, value: number, window: number): n
  * son pagos recurrentes de valor fijo sin referencia propia (tasas,
  * aranceles, PSE a entidades de gobierno), no un error de doble registro.
  */
-function duplicateIds<T extends { id: string; date: Date | null; amount: number; description: string }>(
+export function duplicateIds<T extends { id: string; date: Date | null; amount: number; description: string }>(
   rows: T[],
   extra: (r: T) => string = () => '',
 ): Set<string> {

@@ -16,6 +16,7 @@ import {
   IconSearch,
   IconSettings,
   IconShield,
+  IconTable,
   IconUpload,
   IconUsers,
   IconX,
@@ -38,6 +39,7 @@ const NAV: NavEntry[] = [
   { id: 'contable', label: 'Análisis contable', icon: <IconBook />, group: 'Detalle', needsData: true },
   { id: 'importar', label: 'Importar archivos', icon: <IconUpload />, group: 'Datos' },
   { id: 'reportes', label: 'Reportes', icon: <IconFile />, group: 'Datos', needsData: true },
+  { id: 'dian', label: 'DIAN vs. auxiliar', icon: <IconTable />, group: 'Fiscal' },
   { id: 'configuracion', label: 'Configuración', icon: <IconSettings />, group: 'Datos' },
 ];
 
@@ -49,6 +51,7 @@ const TITLES: Record<Section, { title: string; crumb: string }> = {
   contable: { title: 'Análisis contable', crumb: 'Detalle / Cuentas y grupos' },
   importar: { title: 'Importación de archivos', crumb: 'Datos / Extracto y auxiliar' },
   reportes: { title: 'Reportes y exportación', crumb: 'Datos / Informes' },
+  dian: { title: 'DIAN vs. auxiliar contable', crumb: 'Fiscal / Documentos electrónicos' },
   configuracion: { title: 'Configuración del algoritmo', crumb: 'Datos / Motor de conciliación' },
 };
 

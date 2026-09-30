@@ -30,10 +30,12 @@ src/
 │   │   ├── fileReader.ts    XLSX/XLS/CSV → matriz cruda + detección de fila de encabezados
 │   │   ├── columnMap.ts     Diccionario de sinónimos + scoring de detección automática
 │   │   └── buildDataset.ts  Matriz + mapeo → transacciones normalizadas + validaciones
-│   ├── reconciliation/      MOTOR
-│   │   ├── config.ts        Pesos, umbrales y tolerancias (configurables)
-│   │   ├── scoring.ts       Score 0-100 multicriterio + razones legibles
-│   │   └── engine.ts        Candidatos, asignación global greedy, clasificación
+│   ├── reconciliation/      MOTORES
+│   │   ├── config.ts        Pesos, umbrales y tolerancias del motor banco↔contabilidad
+│   │   ├── scoring.ts       Score 0-100 multicriterio + razones legibles (banco↔contabilidad)
+│   │   ├── engine.ts        Candidatos, asignación global greedy, clasificación (banco↔contabilidad)
+│   │   └── dianEngine.ts    Motor DIAN↔auxiliar: bloqueo por NIT, scoring propio (documento pesa más
+│   │                        que el valor), pensado para documento-número casi determinístico
 │   ├── analytics/           KPIs, agregaciones, alertas, análisis por tercero/cuenta
 │   ├── export/              Excel (multi-hoja) y PDF ejecutivo
 │   └── demo/                Generador de datos ficticios realistas
@@ -41,7 +43,7 @@ src/
 ├── ui/
 │   ├── components/          Reutilizables: KpiCard, DataTable, Badge, Modal, Filters, ...
 │   ├── charts/              Envoltorios Recharts con tema corporativo
-│   └── pages/               Dashboard, Importar, Conciliación, Terceros, Contable, Alertas, Reportes, Config
+│   └── pages/               Dashboard, Importar, Conciliación, Terceros, Contable, Alertas, Reportes, Config, Dian
 └── styles/                  Design tokens (CSS variables) + estilos base
 ```
 
@@ -69,7 +71,21 @@ Archivo → fileReader → RawSheet ─┘                                      
 4. **Clasificación:** CONCILIADO / PROBABLE / REVISIÓN / NO CONCILIADO / DUPLICADO / DIF. VALOR / DIF. FECHA.
 5. **Overlays manuales:** las decisiones del usuario (aceptar, rechazar, vincular, ignorar) se guardan aparte y se re-aplican tras cada re-ejecución.
 
-## 5. Preparado para crecer
+## 5. Módulo DIAN vs. auxiliar
+
+Segundo flujo de conciliación, independiente del de banco (archivos, mapeo, motor y estado propios en
+el store bajo el prefijo `dian*`), pensado para verificar la facturación electrónica:
+
+- **Entrada:** reporte de documentos electrónicos DIAN (Excel/CSV) + un auxiliar contable (cuenta de
+  ingresos o de compras/CxP, según lo que se esté conciliando — configurable).
+- **Motor (`dianEngine.ts`):** a diferencia del banco, el número de documento es casi determinístico
+  (NIT + prefijo/número), así que el bloqueo de candidatos es por NIT (no por rango de valor) y el
+  criterio de documento pesa más que el de valor en el score.
+- **Documentos rechazados/anulados** se marcan `NO_VALIDO` directamente, sin exigirles soporte contable.
+- **Resultado:** facturas DIAN sin registrar, registros contables sin soporte DIAN, y diferencias de
+  valor entre ambos — con la misma mecánica de overlays manuales (aceptar/rechazar/vincular/ignorar).
+
+## 6. Preparado para crecer
 
 - **Multiempresa:** el store ya trabaja sobre un objeto `Workspace`; basta anteponer `companyId` y persistir en IndexedDB o API.
 - **Otros bancos:** `parsing/columnMap.ts` expone perfiles (`BANK_PROFILES`); agregar un perfil nuevo no toca el motor.

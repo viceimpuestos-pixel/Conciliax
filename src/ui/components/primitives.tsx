@@ -4,8 +4,8 @@
  */
 
 import React, { useEffect, useRef, useState, type ReactNode } from 'react';
-import type { MatchStatus } from '../../core/types';
-import { STATUS_LABEL } from '../../core/types';
+import type { DianMatchStatus, MatchStatus } from '../../core/types';
+import { DIAN_STATUS_LABEL, STATUS_LABEL } from '../../core/types';
 
 /* ==================================================================
    Iconos
@@ -192,6 +192,15 @@ export function StatusBadge({ status }: { status: MatchStatus }) {
     <span className={'badge ' + status}>
       <i className="dot" />
       {STATUS_LABEL[status]}
+    </span>
+  );
+}
+
+export function DianStatusBadge({ status }: { status: DianMatchStatus }) {
+  return (
+    <span className={'badge ' + status}>
+      <i className="dot" />
+      {DIAN_STATUS_LABEL[status]}
     </span>
   );
 }

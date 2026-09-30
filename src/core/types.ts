@@ -240,3 +240,156 @@ export interface DatasetStats {
   duplicates: number;
   distinctThirdParties: number;
 }
+
+/* ==================================================================== */
+/* Módulo DIAN vs. Auxiliar (facturación electrónica)                    */
+/* ==================================================================== */
+
+/** Estado del documento electrónico ante la DIAN. */
+export type DianDocStatus = 'VALIDADO' | 'RECHAZADO' | 'ANULADO' | 'OTRO';
+
+export const DIAN_DOC_STATUS_LABEL: Record<DianDocStatus, string> = {
+  VALIDADO: 'Validado',
+  RECHAZADO: 'Rechazado',
+  ANULADO: 'Anulado',
+  OTRO: 'Sin estado',
+};
+
+/** Documento electrónico reportado por la DIAN, ya normalizado. */
+export interface DianTx {
+  id: string;
+  rowIndex: number;
+  nit: string;
+  nitRaw: string;
+  thirdPartyName: string;
+  documentType: string;
+  prefix: string;
+  number: string;
+  /** prefijo + número normalizados; llave principal de cruce con el auxiliar. */
+  documentKey: string;
+  cufe: string;
+  issueDate: Date | null;
+  validationDate: Date | null;
+  /** Valor total del documento (siempre positivo). */
+  amount: number;
+  tax: number;
+  status: DianDocStatus;
+  statusRaw: string;
+  raw: Record<string, unknown>;
+}
+
+/** Campos canónicos del reporte DIAN. */
+export type DianField =
+  | 'nit'
+  | 'thirdPartyName'
+  | 'documentType'
+  | 'prefix'
+  | 'number'
+  | 'cufe'
+  | 'issueDate'
+  | 'validationDate'
+  | 'amount'
+  | 'tax'
+  | 'status';
+
+export interface DianDatasetStats {
+  total: number;
+  valid: number;
+  discarded: number;
+  minDate: Date | null;
+  maxDate: Date | null;
+  totalAmount: number;
+  validados: number;
+  rechazados: number;
+  anulados: number;
+  distinctThirdParties: number;
+  duplicates: number;
+}
+
+export interface DianDataset {
+  kind: 'dian';
+  fileName: string;
+  sheetName: string;
+  rows: DianTx[];
+  mapping: ColumnMapping;
+  headers: string[];
+  issues: ValidationIssue[];
+  stats: DianDatasetStats;
+}
+
+export type DianMatchStatus =
+  | 'CONCILIADO'
+  | 'PROBABLE'
+  | 'REVISION'
+  | 'DIF_VALOR'
+  | 'DIF_FECHA'
+  | 'NO_CONCILIADO'
+  | 'NO_VALIDO'
+  | 'IGNORADO';
+
+export const DIAN_STATUS_LABEL: Record<DianMatchStatus, string> = {
+  CONCILIADO: 'Conciliado',
+  PROBABLE: 'Coincidencia probable',
+  REVISION: 'Pendiente de revisión',
+  DIF_VALOR: 'Diferencia de valor',
+  DIF_FECHA: 'Diferencia de fecha',
+  NO_CONCILIADO: 'No conciliado',
+  NO_VALIDO: 'No válido ante la DIAN',
+  IGNORADO: 'Ignorado',
+};
+
+export interface DianMatchReason {
+  code: string;
+  label: string;
+  points: number;
+}
+
+/** Cruce entre un documento DIAN y un registro del auxiliar. */
+export interface DianMatch {
+  id: string;
+  dianId: string;
+  ledgerId: string;
+  score: number;
+  status: DianMatchStatus;
+  reasons: DianMatchReason[];
+  /** dian.amount - ledger.amount */
+  amountDiff: number;
+  daysDiff: number | null;
+  origin: 'auto' | 'manual';
+  explanation: string;
+}
+
+export interface DianReconciliationResult {
+  matches: DianMatch[];
+  byDian: Map<string, DianMatch>;
+  byLedger: Map<string, DianMatch>;
+  dianStatus: Map<string, DianMatchStatus>;
+  ledgerStatus: Map<string, DianMatchStatus>;
+  unmatchedDian: string[];
+  unmatchedLedger: string[];
+  ignoredDian: Set<string>;
+  ignoredLedger: Set<string>;
+  runAt: Date;
+  elapsedMs: number;
+}
+
+/** Decisiones manuales del usuario para el módulo DIAN. */
+export interface DianManualOverrides {
+  accepted: string[];
+  rejected: string[];
+  manualLinks: { dianId: string; ledgerId: string }[];
+  ignoredDian: string[];
+  ignoredLedger: string[];
+  reviewed: string[];
+  notes: Record<string, string>;
+}
+
+export const EMPTY_DIAN_OVERRIDES: DianManualOverrides = {
+  accepted: [],
+  rejected: [],
+  manualLinks: [],
+  ignoredDian: [],
+  ignoredLedger: [],
+  reviewed: [],
+  notes: {},
+};

@@ -8,13 +8,17 @@ import type {
   ColumnMapping,
   Dataset,
   DatasetStats,
+  DianDataset,
+  DianDatasetStats,
+  DianDocStatus,
+  DianTx,
   LedgerTx,
   RawSheet,
   ValidationIssue,
 } from '../types';
 import { parseMoney, round2, type DecimalHint } from '../normalize/money';
 import { parseDate, type DateOrder } from '../normalize/dates';
-import { normalizeText } from '../normalize/text';
+import { normalizeRef, normalizeText } from '../normalize/text';
 import { normalizeNit } from '../normalize/nit';
 
 export interface BuildOptions {
@@ -416,4 +420,188 @@ export function findDuplicateIds<T extends { id: string; date: Date | null; amou
   const keys = rows.map((r) => [r.date?.getTime() ?? 'nd', r.amount, normalizeText(r.description).slice(0, 40)].join('|'));
   const idx = markDuplicates(keys);
   return new Set([...idx].map((i) => rows[i].id));
+}
+
+/* ------------------------------------------------------------------ */
+/* Reporte DIAN (documentos electrónicos)                              */
+/* ------------------------------------------------------------------ */
+
+const DIAN_VALID_WORDS = /^(VALID|ACEPTAD|APROBAD|EXITOS)/;
+const DIAN_REJECTED_WORDS = /^RECHAZAD/;
+const DIAN_VOID_WORDS = /^ANULAD/;
+
+function classifyDianStatus(raw: string): DianDocStatus {
+  const t = normalizeText(raw);
+  if (!t) return 'OTRO';
+  if (DIAN_REJECTED_WORDS.test(t)) return 'RECHAZADO';
+  if (DIAN_VOID_WORDS.test(t)) return 'ANULADO';
+  if (DIAN_VALID_WORDS.test(t)) return 'VALIDADO';
+  return 'OTRO';
+}
+
+/** prefijo + número normalizados: llave de cruce documento <-> auxiliar. */
+export function buildDocumentKey(prefix: string, number: string): string {
+  const p = normalizeRef(prefix);
+  const n = normalizeRef(number);
+  if (!n) return '';
+  return p ? p + n : n;
+}
+
+export function buildDianDataset(
+  sheet: RawSheet,
+  mapping: ColumnMapping,
+  options: Pick<BuildOptions, 'dateOrder' | 'decimalHint' | 'dropTotals'> = {},
+): DianDataset {
+  const opts = { dateOrder: 'auto' as DateOrder, decimalHint: 'auto' as DecimalHint, dropTotals: true, ...options };
+  const issues: ValidationIssue[] = [];
+  const rows: DianTx[] = [];
+  const noDate: number[] = [];
+  const noAmount: number[] = [];
+  const noNit: number[] = [];
+  let discardedTotals = 0;
+  let validados = 0;
+  let rechazados = 0;
+  let anulados = 0;
+
+  sheet.rows.forEach((row, i) => {
+    if (opts.dropTotals && looksLikeTotal(row)) {
+      discardedTotals++;
+      return;
+    }
+
+    const date = parseDate(cell(row, mapping, 'issueDate'), opts.dateOrder);
+    const amount = Math.abs(parseMoney(cell(row, mapping, 'amount'), opts.decimalHint));
+    const nitRaw = str(row, mapping, 'nit');
+    const nit = normalizeNit(nitRaw);
+
+    if (!date) noDate.push(i + sheet.headerRowIndex + 2);
+    if (amount === 0) {
+      noAmount.push(i + sheet.headerRowIndex + 2);
+      return;
+    }
+    if (!nit) noNit.push(i + sheet.headerRowIndex + 2);
+
+    const statusRaw = str(row, mapping, 'status');
+    const status = classifyDianStatus(statusRaw);
+    if (status === 'VALIDADO') validados++;
+    else if (status === 'RECHAZADO') rechazados++;
+    else if (status === 'ANULADO') anulados++;
+
+    const prefix = str(row, mapping, 'prefix');
+    const number = str(row, mapping, 'number');
+
+    rows.push({
+      id: 'D' + String(rows.length + 1).padStart(5, '0'),
+      rowIndex: i + sheet.headerRowIndex + 2,
+      nit,
+      nitRaw,
+      thirdPartyName: str(row, mapping, 'thirdPartyName'),
+      documentType: str(row, mapping, 'documentType'),
+      prefix,
+      number,
+      documentKey: buildDocumentKey(prefix, number),
+      cufe: str(row, mapping, 'cufe'),
+      issueDate: date,
+      validationDate: parseDate(cell(row, mapping, 'validationDate'), opts.dateOrder),
+      amount: round2(amount),
+      tax: round2(Math.abs(parseMoney(cell(row, mapping, 'tax'), opts.decimalHint))),
+      status,
+      statusRaw,
+      raw: rawRecord(sheet, row),
+    });
+  });
+
+  const dupIdx = markDuplicates(
+    rows.map((r) => [r.nit, r.documentKey].filter(Boolean).join('|')),
+  );
+
+  if (noDate.length) {
+    issues.push({
+      level: 'warning',
+      code: 'DIAN_SIN_FECHA',
+      message: 'Documentos DIAN sin fecha de emisión reconocible.',
+      count: noDate.length,
+      rows: noDate.slice(0, 20),
+    });
+  }
+  if (noAmount.length) {
+    issues.push({
+      level: 'warning',
+      code: 'DIAN_SIN_VALOR',
+      message: 'Filas descartadas por no tener valor total.',
+      count: noAmount.length,
+      rows: noAmount.slice(0, 20),
+    });
+  }
+  if (noNit.length) {
+    issues.push({
+      level: 'warning',
+      code: 'DIAN_SIN_NIT',
+      message: 'Documentos DIAN sin NIT de la contraparte. Se conciliarán sólo por número de documento y valor.',
+      count: noNit.length,
+      rows: noNit.slice(0, 20),
+    });
+  }
+  if (discardedTotals) {
+    issues.push({
+      level: 'info',
+      code: 'DIAN_TOTALES',
+      message: 'Filas de totales/subtotales omitidas automáticamente.',
+      count: discardedTotals,
+    });
+  }
+  if (dupIdx.size) {
+    issues.push({
+      level: 'warning',
+      code: 'DIAN_DUPLICADOS',
+      message: 'Posibles documentos DIAN duplicados (mismo NIT y número de documento).',
+      count: dupIdx.size,
+      rows: [...dupIdx].slice(0, 20).map((i) => rows[i].rowIndex),
+    });
+  }
+  if (!rows.length) {
+    issues.push({
+      level: 'error',
+      code: 'DIAN_VACIO',
+      message: 'No se obtuvo ningún documento DIAN válido. Revise el mapeo de columnas.',
+    });
+  }
+
+  let minDate: Date | null = null;
+  let maxDate: Date | null = null;
+  let totalAmount = 0;
+  const parties = new Set<string>();
+  for (const r of rows) {
+    if (r.issueDate) {
+      if (!minDate || r.issueDate < minDate) minDate = r.issueDate;
+      if (!maxDate || r.issueDate > maxDate) maxDate = r.issueDate;
+    }
+    totalAmount += r.amount;
+    if (r.nit) parties.add(r.nit);
+  }
+
+  const stats: DianDatasetStats = {
+    total: sheet.rows.length,
+    valid: rows.length,
+    discarded: sheet.rows.length - rows.length,
+    minDate,
+    maxDate,
+    totalAmount: round2(totalAmount),
+    validados,
+    rechazados,
+    anulados,
+    distinctThirdParties: parties.size,
+    duplicates: dupIdx.size,
+  };
+
+  return {
+    kind: 'dian',
+    fileName: sheet.fileName,
+    sheetName: sheet.sheetName,
+    rows,
+    mapping,
+    headers: sheet.headers,
+    issues,
+    stats,
+  };
 }

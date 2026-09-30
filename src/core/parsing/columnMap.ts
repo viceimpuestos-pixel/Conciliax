@@ -222,13 +222,113 @@ export const LEDGER_FIELDS: FieldSpec[] = [
   },
 ];
 
-export function fieldsFor(kind: 'bank' | 'ledger'): FieldSpec[] {
-  return kind === 'bank' ? BANK_FIELDS : LEDGER_FIELDS;
+/* ------------------------------------------------------------------ */
+/* Campos del reporte DIAN (documentos electrónicos)                   */
+/* ------------------------------------------------------------------ */
+
+export const DIAN_FIELDS: FieldSpec[] = [
+  {
+    key: 'nit',
+    label: 'NIT de la contraparte',
+    type: 'id',
+    required: true,
+    synonyms: [
+      'NIT', 'NIT EMISOR', 'NIT RECEPTOR', 'NIT ADQUIRIENTE', 'NIT VENDEDOR', 'NIT COMPRADOR',
+      'IDENTIFICACION EMISOR', 'IDENTIFICACION RECEPTOR', 'NUMERO DOCUMENTO EMISOR',
+      'NUMERO DOCUMENTO RECEPTOR', 'NIT TERCERO',
+    ],
+    help: 'NIT del emisor o del receptor de la factura, según el reporte.',
+  },
+  {
+    key: 'thirdPartyName',
+    label: 'Razón social de la contraparte',
+    type: 'text',
+    synonyms: [
+      'RAZON SOCIAL', 'NOMBRE EMISOR', 'NOMBRE RECEPTOR', 'RAZON SOCIAL EMISOR',
+      'RAZON SOCIAL RECEPTOR', 'RAZON SOCIAL ADQUIRIENTE', 'NOMBRE ADQUIRIENTE', 'ENTIDAD',
+      'NOMBRE VENDEDOR', 'NOMBRE COMPRADOR',
+    ],
+  },
+  {
+    key: 'documentType',
+    label: 'Tipo de documento',
+    type: 'text',
+    synonyms: [
+      'TIPO DOCUMENTO', 'TIPO DE DOCUMENTO', 'TIPO DOC', 'CLASE DOCUMENTO', 'DOCUMENTO TIPO',
+      'TIPO COMPROBANTE',
+    ],
+  },
+  {
+    key: 'prefix',
+    label: 'Prefijo',
+    type: 'text',
+    synonyms: ['PREFIJO', 'PREFIX'],
+  },
+  {
+    key: 'number',
+    label: 'Número / Folio',
+    type: 'text',
+    required: true,
+    synonyms: [
+      'NUMERO', 'NUMERO FACTURA', 'NUMERO DOCUMENTO', 'FOLIO', 'CONSECUTIVO', 'NUMERO FE',
+      'NRO FACTURA', 'NUM FACTURA', 'FACTURA', 'NUMBER',
+    ],
+  },
+  {
+    key: 'cufe',
+    label: 'CUFE / CUDE',
+    type: 'text',
+    synonyms: ['CUFE', 'CUDE', 'CODIGO UNICO', 'CODIGO UNICO DE FACTURA ELECTRONICA'],
+  },
+  {
+    key: 'issueDate',
+    label: 'Fecha de emisión',
+    type: 'date',
+    required: true,
+    synonyms: [
+      'FECHA EMISION', 'FECHA DE EMISION', 'FECHA GENERACION', 'FECHA FACTURA',
+      'FECHA DOCUMENTO', 'FECHA EXPEDICION', 'FECHA',
+    ],
+  },
+  {
+    key: 'validationDate',
+    label: 'Fecha de validación DIAN',
+    type: 'date',
+    synonyms: ['FECHA VALIDACION', 'FECHA VALIDACION DIAN', 'FECHA ACEPTACION', 'FECHA RECEPCION DIAN'],
+  },
+  {
+    key: 'amount',
+    label: 'Valor total',
+    type: 'money',
+    required: true,
+    synonyms: [
+      'VALOR TOTAL', 'TOTAL FACTURA', 'VALOR', 'TOTAL', 'IMPORTE TOTAL', 'VALOR A PAGAR',
+      'TOTAL A PAGAR', 'MONTO TOTAL',
+    ],
+  },
+  {
+    key: 'tax',
+    label: 'IVA / Impuestos',
+    type: 'money',
+    synonyms: ['IVA', 'IMPUESTO', 'IMPUESTOS', 'VALOR IVA', 'TOTAL IMPUESTOS'],
+  },
+  {
+    key: 'status',
+    label: 'Estado ante la DIAN',
+    type: 'text',
+    synonyms: ['ESTADO', 'ESTADO DIAN', 'ESTADO DOCUMENTO', 'STATUS', 'RESULTADO VALIDACION'],
+  },
+];
+
+export function fieldsFor(kind: 'bank' | 'ledger' | 'dian'): FieldSpec[] {
+  if (kind === 'bank') return BANK_FIELDS;
+  if (kind === 'dian') return DIAN_FIELDS;
+  return LEDGER_FIELDS;
 }
 
 /** Todos los sinónimos conocidos (usado para detectar la fila de encabezado). */
 export const ALL_SYNONYMS: Set<string> = new Set(
-  [...BANK_FIELDS, ...LEDGER_FIELDS].flatMap((f) => [normalizeText(f.label), ...f.synonyms]),
+  [...BANK_FIELDS, ...LEDGER_FIELDS, ...DIAN_FIELDS].flatMap((f) => [normalizeText(f.label), ...f.synonyms]),
 );
 
 /* ------------------------------------------------------------------ */
@@ -291,7 +391,7 @@ function contentScore(rows: unknown[][], col: number, type: FieldSpec['type']): 
  * Detecta automáticamente el mapeo de columnas.
  * Combina el nombre del encabezado (peso alto) con el contenido (desempate).
  */
-export function detectMapping(sheet: RawSheet, kind: 'bank' | 'ledger'): DetectionInfo {
+export function detectMapping(sheet: RawSheet, kind: 'bank' | 'ledger' | 'dian'): DetectionInfo {
   const specs = fieldsFor(kind);
   const mapping: ColumnMapping = {};
   const confidence: Record<string, number> = {};

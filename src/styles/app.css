@@ -361,6 +361,7 @@ button { font-family: inherit; }
 .badge.DIF_FECHA    { background: var(--violet-50);color: var(--violet-600);border-color: #ddd6f5; }
 .badge.DUPLICADO    { background: #fdeee3;         color: #a45418;          border-color: #f6d7bf; }
 .badge.NO_CONCILIADO{ background: var(--grey-100); color: var(--grey-600);  border-color: var(--grey-200); }
+.badge.NO_VALIDO    { background: var(--grey-100); color: var(--grey-500);  border-color: var(--grey-200); }
 .badge.IGNORADO     { background: var(--grey-100); color: var(--grey-500);  border-color: var(--grey-200); text-decoration: line-through; }
 
 .badge.critica { background: var(--red-50); color: var(--red-600); border-color: #f5cfcf; }
