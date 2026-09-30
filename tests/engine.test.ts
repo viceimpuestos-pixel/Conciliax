@@ -181,6 +181,7 @@ describe('scoring', () => {
     thirdPartyName: 'DISTRIBUIDORA EL PORVENIR S.A.S.',
     documentType: 'CE',
     documentNumber: 'CE-01234',
+    invoiceNumber: '',
     description: 'PAGO FACTURA DISTRIBUIDORA EL PORVENIR',
     debit: 0,
     credit: 5_000_000,

@@ -41,6 +41,13 @@ export interface LedgerTx {
   thirdPartyName: string;
   documentType: string;
   documentNumber: string;
+  /**
+   * Número de factura (si el auxiliar lo trae en una columna separada del
+   * comprobante contable interno, ej. software que registra "Documento" como
+   * consecutivo interno y "Numero Factura" como el folio del proveedor/DIAN).
+   * Se usa como llave preferida para conciliar contra la DIAN.
+   */
+  invoiceNumber: string;
   description: string;
   debit: number;
   credit: number;
@@ -325,6 +332,7 @@ export type DianMatchStatus =
   | 'DIF_FECHA'
   | 'NO_CONCILIADO'
   | 'NO_VALIDO'
+  | 'FUERA_DE_ALCANCE'
   | 'IGNORADO';
 
 export const DIAN_STATUS_LABEL: Record<DianMatchStatus, string> = {
@@ -335,6 +343,7 @@ export const DIAN_STATUS_LABEL: Record<DianMatchStatus, string> = {
   DIF_FECHA: 'Diferencia de fecha',
   NO_CONCILIADO: 'No conciliado',
   NO_VALIDO: 'No válido ante la DIAN',
+  FUERA_DE_ALCANCE: 'Fuera de alcance (tercero sin documentos DIAN)',
   IGNORADO: 'Ignorado',
 };
 

@@ -319,6 +319,7 @@ export function buildLedgerDataset(
       thirdPartyName: str(row, mapping, 'thirdPartyName'),
       documentType: str(row, mapping, 'documentType'),
       documentNumber: str(row, mapping, 'documentNumber'),
+      invoiceNumber: str(row, mapping, 'invoiceNumber'),
       description: str(row, mapping, 'description'),
       debit,
       credit,
@@ -430,6 +431,20 @@ const DIAN_VALID_WORDS = /^(VALID|ACEPTAD|APROBAD|EXITOS)/;
 const DIAN_REJECTED_WORDS = /^RECHAZAD/;
 const DIAN_VOID_WORDS = /^ANULAD/;
 
+/**
+ * Tipos de "documento" que en realidad son eventos técnicos del proceso de
+ * facturación electrónica (acuses de recibo, aceptación, reclamos), no
+ * documentos fiscales con valor propio. La mayoría de reportes DIAN los
+ * incluyen junto con las facturas reales; si no se excluyen aquí, quedan
+ * descartados igual por no traer valor, pero con un mensaje que sugiere
+ * (equivocadamente) un problema de datos.
+ */
+const DIAN_NON_FISCAL_TYPES = /APPLICATION RESPONSE|ACUSE DE RECIB|RECIBO DE BIEN|ACEPTACION (EXPRESA|TACITA)|RECLAMO/;
+
+function isNonFiscalEvent(documentType: string): boolean {
+  return DIAN_NON_FISCAL_TYPES.test(normalizeText(documentType));
+}
+
 function classifyDianStatus(raw: string): DianDocStatus {
   const t = normalizeText(raw);
   if (!t) return 'OTRO';
@@ -459,6 +474,7 @@ export function buildDianDataset(
   const noAmount: number[] = [];
   const noNit: number[] = [];
   let discardedTotals = 0;
+  let discardedNonFiscal = 0;
   let validados = 0;
   let rechazados = 0;
   let anulados = 0;
@@ -466,6 +482,12 @@ export function buildDianDataset(
   sheet.rows.forEach((row, i) => {
     if (opts.dropTotals && looksLikeTotal(row)) {
       discardedTotals++;
+      return;
+    }
+
+    const documentTypeRaw = str(row, mapping, 'documentType');
+    if (isNonFiscalEvent(documentTypeRaw)) {
+      discardedNonFiscal++;
       return;
     }
 
@@ -496,7 +518,7 @@ export function buildDianDataset(
       nit,
       nitRaw,
       thirdPartyName: str(row, mapping, 'thirdPartyName'),
-      documentType: str(row, mapping, 'documentType'),
+      documentType: documentTypeRaw,
       prefix,
       number,
       documentKey: buildDocumentKey(prefix, number),
@@ -548,6 +570,14 @@ export function buildDianDataset(
       code: 'DIAN_TOTALES',
       message: 'Filas de totales/subtotales omitidas automáticamente.',
       count: discardedTotals,
+    });
+  }
+  if (discardedNonFiscal) {
+    issues.push({
+      level: 'info',
+      code: 'DIAN_EVENTO_NO_FISCAL',
+      message: 'Eventos del proceso de facturación electrónica omitidos (acuses de recibo, aceptación, etc.): no son documentos fiscales y no requieren soporte contable propio.',
+      count: discardedNonFiscal,
     });
   }
   if (dupIdx.size) {

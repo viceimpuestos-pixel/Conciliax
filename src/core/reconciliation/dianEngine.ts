@@ -30,7 +30,7 @@ import type {
 import { EMPTY_DIAN_OVERRIDES } from '../types';
 import { duplicateIds } from './engine';
 import { daysBetween } from '../normalize/dates';
-import { nitEquals } from '../normalize/nit';
+import { calcDV, nitEquals } from '../normalize/nit';
 import { nameSimilarity, normalizeRef, refMatches } from '../normalize/text';
 
 /* ------------------------------------------------------------------ */
@@ -136,9 +136,15 @@ export function scoreDianPair(doc: DianTx, ledger: LedgerTx, cfg: DianConfig): D
   const bothNit = Boolean(doc.nit) && Boolean(ledger.thirdPartyId);
   if (bothNit && !nitEquals(doc.nit, ledger.thirdPartyId)) return REJECTED;
 
+  // El auxiliar no tiene un filtro de "misma naturaleza" como el de banco: una
+  // factura de compra suele generar dos líneas espejo (débito y crédito) y
+  // cualquiera de las dos es un candidato válido. Por eso amountDiff compara
+  // siempre en valor absoluto — comparar con el signo crudo de `ledger.amount`
+  // marcaría como "diferencia de valor" un cruce exacto cuyo lado contable
+  // resultó negativo.
   const ledgerAbs = Math.abs(ledger.amount);
-  const amountDiff = Math.round((doc.amount - ledger.amount) * 100) / 100;
-  const absDiff = Math.abs(doc.amount - ledgerAbs);
+  const amountDiff = Math.round((doc.amount - ledgerAbs) * 100) / 100;
+  const absDiff = Math.abs(amountDiff);
   const tolerance = Math.max(t.amountAbsolute, (doc.amount * t.amountPercent) / 100);
   // Ventana ampliada: un documento puede diferir bastante en valor y seguir
   // siendo el mismo si el número de documento coincide exacto (ej. retención
@@ -159,12 +165,20 @@ export function scoreDianPair(doc: DianTx, ledger: LedgerTx, cfg: DianConfig): D
   };
 
   // 1. Número de documento --------------------------------------------
+  // Se prefiere el campo "número de factura" (si el auxiliar lo trae aparte
+  // del comprobante contable interno) porque suele ser el que realmente
+  // corresponde al folio DIAN; "documentNumber" es el respaldo genérico.
   max += w.document;
+  const ledgerInvoice = normalizeRef(ledger.invoiceNumber);
   const ledgerDoc = normalizeRef(ledger.documentNumber);
   const docKey = doc.documentKey;
   const numberOnly = normalizeRef(doc.number);
-  if (docKey && ledgerDoc && docKey === ledgerDoc) {
+  if (docKey && ledgerInvoice && docKey === ledgerInvoice) {
+    add('DOCUMENTO', 'Mismo número de factura (' + (doc.prefix ? doc.prefix + ' ' : '') + doc.number + ')', w.document);
+  } else if (docKey && ledgerDoc && docKey === ledgerDoc) {
     add('DOCUMENTO', 'Mismo número de documento (' + (doc.prefix ? doc.prefix + ' ' : '') + doc.number + ')', w.document);
+  } else if (numberOnly && ledgerInvoice && ledgerInvoice.length >= 3 && ledgerInvoice.includes(numberOnly)) {
+    add('DOCUMENTO_PARCIAL', 'Número de factura contenido en el registro contable', w.document * 0.85);
   } else if (numberOnly && ledgerDoc && ledgerDoc.length >= 3 && ledgerDoc.includes(numberOnly)) {
     add('DOCUMENTO_PARCIAL', 'Número de documento contenido en el registro contable', w.document * 0.85);
   } else if (numberOnly.length >= 3 && refMatches(numberOnly, ledger.description)) {
@@ -280,6 +294,17 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
   const dianById = new Map(dian.map((d) => [d.id, d]));
   const ledgerById = new Map(ledger.map((l) => [l.id, l]));
 
+  // Llave de "partida doble": una factura de compra suele generar dos líneas
+  // contables espejo (débito y crédito) con el mismo NIT + número de factura
+  // o documento. Se usa tanto para no penalizar como "ambiguo" el que ambas
+  // líneas sean candidatas igual de buenas, como para propagar la cobertura
+  // a la línea que no quedó formalmente cruzada.
+  const ledgerGroupKey = (l: LedgerTx): string => {
+    const doc = normalizeRef(l.invoiceNumber) || normalizeRef(l.documentNumber);
+    if (!l.thirdPartyId || !doc) return '';
+    return l.thirdPartyId + '|' + doc;
+  };
+
   const takenDian = new Set<string>();
   const takenLedger = new Set<string>();
   const matches: DianMatch[] = [];
@@ -345,20 +370,35 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
 
   /* --- 4. Candidatos automáticos (bloqueo por NIT) -------------------- */
 
+  // Es común que un lado traiga el dígito de verificación pegado al NIT y el
+  // otro no (ej. "8002421062" vs "800242106"). El índice de bloqueo debe ser
+  // tan tolerante como `nitEquals`, o esos pares nunca llegan a competir por
+  // puntaje: se registran/consultan ambas formas (con y sin DV).
+  function nitIndexKeys(nit: string): string[] {
+    if (nit.length < 9) return [nit];
+    const base = nit.slice(0, -1);
+    const dv = calcDV(base);
+    return dv !== null && String(dv) === nit.slice(-1) ? [nit, base] : [nit];
+  }
+
   const byNit = new Map<string, number[]>();
   const byDoc = new Map<string, number[]>();
+  const addToDoc = (key: string, idx: number) => {
+    if (!key) return;
+    const arr = byDoc.get(key) ?? [];
+    arr.push(idx);
+    byDoc.set(key, arr);
+  };
   ledger.forEach((l, idx) => {
     if (l.thirdPartyId) {
-      const arr = byNit.get(l.thirdPartyId) ?? [];
-      arr.push(idx);
-      byNit.set(l.thirdPartyId, arr);
+      for (const key of nitIndexKeys(l.thirdPartyId)) {
+        const arr = byNit.get(key) ?? [];
+        arr.push(idx);
+        byNit.set(key, arr);
+      }
     }
-    const key = normalizeRef(l.documentNumber);
-    if (key) {
-      const arr = byDoc.get(key) ?? [];
-      arr.push(idx);
-      byDoc.set(key, arr);
-    }
+    addToDoc(normalizeRef(l.invoiceNumber), idx);
+    addToDoc(normalizeRef(l.documentNumber), idx);
   });
 
   interface Pair {
@@ -372,7 +412,11 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
     if (ignoredDian.has(d.id) || takenDian.has(d.id) || notValid.has(d.id)) return;
 
     const candidateIdx = new Set<number>();
-    if (d.nit && byNit.has(d.nit)) byNit.get(d.nit)!.forEach((i) => candidateIdx.add(i));
+    if (d.nit) {
+      for (const key of nitIndexKeys(d.nit)) {
+        if (byNit.has(key)) byNit.get(key)!.forEach((i) => candidateIdx.add(i));
+      }
+    }
     if (!candidateIdx.size && d.documentKey && byDoc.has(d.documentKey)) {
       byDoc.get(d.documentKey)!.forEach((i) => candidateIdx.add(i));
     }
@@ -401,11 +445,16 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
     return Math.abs(a.s.daysDiff ?? 999) - Math.abs(b.s.daysDiff ?? 999);
   });
 
-  const topScoreByDian = new Map<string, number[]>();
+  // Grupo de cada candidato; si no tiene NIT+documento para agrupar, se usa
+  // su propio id de línea (nunca coincide con otra línea, así que cuenta
+  // como candidato distinto para efectos de ambigüedad).
+  const groupForLedger = (l: LedgerTx): string => ledgerGroupKey(l) || 'ID:' + l.id;
+
+  const topScoreByDian = new Map<string, { score: number; group: string }[]>();
   for (const p of pairs) {
     const id = dian[p.dianIdx].id;
     const list = topScoreByDian.get(id) ?? [];
-    list.push(p.s.score);
+    list.push({ score: p.s.score, group: groupForLedger(ledger[p.ledgerIdx]) });
     topScoreByDian.set(id, list);
   }
 
@@ -415,8 +464,14 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
     if (takenDian.has(d.id) || takenLedger.has(l.id)) continue;
     if (p.s.score < cfg.thresholds.revision) continue;
 
-    const scores = topScoreByDian.get(d.id) ?? [];
-    const ambiguous = cfg.flagAmbiguous && scores.filter((s) => Math.abs(s - p.s.score) < 0.05).length > 1;
+    const candidates = topScoreByDian.get(d.id) ?? [];
+    const myGroup = groupForLedger(l);
+    // Dos líneas espejo de la misma factura (mismo grupo) no cuentan como
+    // candidatos "distintos" para efectos de ambigüedad.
+    const competingGroups = new Set(
+      candidates.filter((c) => Math.abs(c.score - p.s.score) < 0.05 && c.group !== myGroup).map((c) => c.group),
+    );
+    const ambiguous = cfg.flagAmbiguous && competingGroups.size > 0;
 
     const status = classify(p.s.score, p.s.amountDiff, p.s.daysDiff, cfg, ambiguous);
 
@@ -449,6 +504,25 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
 
   const dupLedger = duplicateIds(ledger, (l) => l.thirdPartyId + normalizeRef(l.documentNumber));
 
+  // NITs que sí reportan documentos DIAN (válidos). Un renglón del auxiliar
+  // cuyo tercero nunca aparece en el reporte DIAN no es responsabilidad de
+  // esta conciliación (nómina, activos fijos, impuestos, etc.) — se marca
+  // "fuera de alcance" en vez de inflar "sin soporte DIAN".
+  const dianNitSet = new Set<string>();
+  for (const d of dian) {
+    if (!notValid.has(d.id) && d.nit) dianNitSet.add(d.nit);
+  }
+
+  // Cobertura por partida doble: si una de las dos líneas espejo quedó
+  // cruzada contra la DIAN, la otra no debe verse como "sin soporte".
+  const groupCoverage = new Map<string, DianMatch>();
+  for (const l of ledger) {
+    const m = byLedger.get(l.id);
+    if (!m) continue;
+    const key = ledgerGroupKey(l);
+    if (key) groupCoverage.set(key, m);
+  }
+
   const dianStatus = new Map<string, DianMatchStatus>();
   const ledgerStatus = new Map<string, DianMatchStatus>();
   const unmatchedDian: string[] = [];
@@ -480,10 +554,20 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
     const m = byLedger.get(l.id);
     if (m) {
       ledgerStatus.set(l.id, m.status);
-    } else {
-      ledgerStatus.set(l.id, dupLedger.has(l.id) ? 'REVISION' : 'NO_CONCILIADO');
-      unmatchedLedger.push(l.id);
+      continue;
     }
+    const sibling = groupCoverage.get(ledgerGroupKey(l));
+    if (sibling) {
+      ledgerStatus.set(l.id, sibling.status);
+      continue;
+    }
+    const knownVendor = l.thirdPartyId && nitIndexKeys(l.thirdPartyId).some((k) => dianNitSet.has(k));
+    if (!knownVendor) {
+      ledgerStatus.set(l.id, 'FUERA_DE_ALCANCE');
+      continue;
+    }
+    ledgerStatus.set(l.id, dupLedger.has(l.id) ? 'REVISION' : 'NO_CONCILIADO');
+    unmatchedLedger.push(l.id);
   }
 
   return {

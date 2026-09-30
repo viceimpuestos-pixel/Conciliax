@@ -188,6 +188,16 @@ export const LEDGER_FIELDS: FieldSpec[] = [
     ],
   },
   {
+    key: 'invoiceNumber',
+    label: 'Número de factura (opcional)',
+    type: 'text',
+    synonyms: [
+      'NUMERO FACTURA', 'NUMERO DE FACTURA', 'NRO FACTURA', 'NUM FACTURA', 'FACTURA',
+      'FACTURA ELECTRONICA', 'INVOICE NUMBER', 'NUMERO FE',
+    ],
+    help: 'Si el software contable guarda el folio de la factura en una columna aparte del comprobante interno, selecciónela aquí: se usa de preferencia para conciliar contra la DIAN.',
+  },
+  {
     key: 'description',
     label: 'Descripción / Detalle',
     type: 'text',
