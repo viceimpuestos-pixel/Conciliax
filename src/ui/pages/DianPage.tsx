@@ -667,12 +667,31 @@ function DianDocDetail({
 }) {
   const acceptDianMatch = useStore((s) => s.acceptDianMatch);
   const rejectDianMatch = useStore((s) => s.rejectDianMatch);
+  const linkDianManual = useStore((s) => s.linkDianManual);
   const unlinkDian = useStore((s) => s.unlinkDian);
   const toggleIgnoreDian = useStore((s) => s.toggleIgnoreDian);
+  const [manualQuery, setManualQuery] = useState('');
 
   const status = result.dianStatus.get(doc.id) ?? 'NO_CONCILIADO';
   const match = result.byDian.get(doc.id);
   const matchedLedger = match ? ledger.find((l) => l.id === match.ledgerId) : null;
+
+  const manualCandidates = useMemo(() => {
+    const q = manualQuery.trim().toLowerCase();
+    if (!q) return [];
+    return ledger
+      .filter((l) => {
+        if (result.ledgerStatus.get(l.id) === 'CONCILIADO') return false; // ya tiene soporte
+        return (
+          l.documentNumber.toLowerCase().includes(q) ||
+          l.invoiceNumber.toLowerCase().includes(q) ||
+          l.thirdPartyName.toLowerCase().includes(q) ||
+          l.thirdPartyId.includes(q) ||
+          l.description.toLowerCase().includes(q)
+        );
+      })
+      .slice(0, 8);
+  }, [manualQuery, ledger, result]);
 
   return (
     <Modal open onClose={onClose} title="Detalle del documento DIAN" subtitle={<DianStatusBadge status={status} />} size="wide">
@@ -709,7 +728,49 @@ function DianDocDetail({
               </tbody>
             </table>
           ) : (
-            <EmptyState icon={<IconAlert size={20} />} title="Sin registro contable" description="No se encontró un movimiento en el auxiliar para este documento." />
+            <>
+              <EmptyState icon={<IconAlert size={20} />} title="Sin registro contable" description="No se encontró un movimiento en el auxiliar para este documento." />
+              <div className="mt-12">
+                <Field label="Vincular manualmente" hint="Busque por tercero, NIT, número de documento o de factura.">
+                  <input
+                    type="text"
+                    placeholder="Ej. número de factura o nombre del proveedor…"
+                    value={manualQuery}
+                    onChange={(e) => setManualQuery(e.target.value)}
+                  />
+                </Field>
+                {manualCandidates.length > 0 && (
+                  <table className="mini-table mt-8">
+                    <tbody>
+                      {manualCandidates.map((l) => (
+                        <tr key={l.id}>
+                          <td>
+                            <div className="cell-main">{l.documentNumber || l.invoiceNumber || '—'}</div>
+                            <div className="cell-sub">
+                              {formatDate(l.date)} · {l.thirdPartyName || 'Sin tercero'} · {formatMoney(Math.abs(l.amount))}
+                            </div>
+                          </td>
+                          <td style={{ textAlign: 'right' }}>
+                            <button
+                              className="btn xs primary"
+                              onClick={() => {
+                                linkDianManual(doc.id, l.id);
+                                onClose();
+                              }}
+                            >
+                              Vincular
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+                {manualQuery.trim() && manualCandidates.length === 0 && (
+                  <p className="sub mt-8">Sin resultados para "{manualQuery}".</p>
+                )}
+              </div>
+            </>
           )}
 
           <h4 className="mb-8 mt-16">¿Por qué se seleccionó esta coincidencia?</h4>
