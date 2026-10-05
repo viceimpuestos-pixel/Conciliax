@@ -12,6 +12,7 @@ import { ALERT_KIND_LABEL, SEVERITY_LABEL } from '../analytics/alerts';
 import type { AccountSummary, ThirdPartySummary } from '../analytics/aggregations';
 import { formatDate } from '../normalize/dates';
 import { formatNit } from '../normalize/nit';
+import { buildStatement } from '../analytics/statement';
 
 export interface ExportContext {
   bank: BankTx[];
@@ -28,6 +29,7 @@ export interface ExportContext {
 
 export type ExportSection =
   | 'resumen'
+  | 'partidas'
   | 'completa'
   | 'conciliados'
   | 'pendientes'
@@ -40,6 +42,7 @@ export type ExportSection =
 
 export const EXPORT_SECTIONS: { id: ExportSection; label: string; description: string }[] = [
   { id: 'resumen', label: 'Resumen ejecutivo', description: 'KPIs, saldos y porcentaje de conciliación.' },
+  { id: 'partidas', label: 'Conciliación bancaria (partidas)', description: 'Saldo en libros → partidas conciliatorias una por una → saldo en banco.' },
   { id: 'completa', label: 'Conciliación completa', description: 'Todos los movimientos bancarios con su contraparte contable.' },
   { id: 'conciliados', label: 'Movimientos conciliados', description: 'Sólo los cruces confirmados.' },
   { id: 'pendientes', label: 'Movimientos pendientes', description: 'Probables, en revisión y con diferencias.' },
@@ -130,6 +133,66 @@ function autoWidths(rows: Record<string, unknown>[]): XLSX.ColInfo[] {
   });
 }
 
+/**
+ * Hoja "Conciliación bancaria" en formato tradicional: saldo en libros, cada
+ * grupo de partidas con su detalle y subtotal, y saldo en banco al final.
+ */
+function addStatementSheet(wb: XLSX.WorkBook, ctx: ExportContext) {
+  const st = buildStatement(ctx.bank, ctx.ledger, ctx.result, ctx.kpis);
+  const MONEY = '#,##0.00;(#,##0.00);-';
+  const aoa: unknown[][] = [];
+  const money: [number, number][] = [];
+  const bold: number[] = [];
+  const put = (row: unknown[], moneyCols: number[] = [], isBold = false) => {
+    aoa.push(row);
+    const r = aoa.length - 1;
+    moneyCols.forEach((c) => money.push([r, c]));
+    if (isBold) bold.push(r);
+  };
+
+  put(['CONCILIACIÓN BANCARIA'], [], true);
+  put(['Extracto: ' + ctx.meta.bankFile + ' · Auxiliar: ' + ctx.meta.ledgerFile]);
+  put(['Generado: ' + formatDate(ctx.meta.generatedAt)]);
+  put([]);
+  put(['SALDO SEGÚN LIBROS', '', '', '', '', st.saldoLibros], [5], true);
+  put([]);
+
+  for (const sec of st.sections) {
+    if (!sec.items.length) continue;
+    put([(sec.id === 'diferenciasCruces' ? '(±) ' : sec.sign > 0 ? '(+) ' : '(−) ') + sec.title.toUpperCase() + ' (' + sec.items.length + ')', '', '', '', '', sec.sign * sec.total], [5], true);
+    put([sec.hint]);
+    put(['Fecha', 'Fila archivo', 'Descripción', 'Documento / Ref.', 'Valor']);
+    for (const it of sec.items) {
+      put([formatDate(it.date), it.row, it.description, it.reference, it.value], [4]);
+    }
+    put([]);
+  }
+
+  put(['SALDO SEGÚN BANCO (conciliado)', '', '', '', '', st.saldoBancoConciliado], [5], true);
+  put(['SALDO SEGÚN BANCO (extracto)', '', '', '', '', st.saldoBanco], [5], true);
+  put(['DIFERENCIA SIN EXPLICAR', '', '', '', '', st.sinExplicar], [5], true);
+  if (ctx.kpis.saldoBancoOrigen === 'supuesto') {
+    put([]);
+    put([
+      'Nota: el extracto no trae columna de saldo. El saldo del banco se calculó como saldo inicial ' +
+        (ctx.kpis.saldoInicialBanco ?? 0).toLocaleString('es-CO') +
+        ' (asumido igual al del auxiliar) + movimientos del período.',
+    ]);
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  for (const [r, c] of money) {
+    const cell = ws[XLSX.utils.encode_cell({ r, c })];
+    if (cell && typeof cell.v === 'number') cell.z = MONEY;
+  }
+  for (const r of bold) {
+    const cell = ws[XLSX.utils.encode_cell({ r, c: 0 })];
+    if (cell) cell.s = { font: { bold: true } };
+  }
+  ws['!cols'] = [{ wch: 14 }, { wch: 11 }, { wch: 70 }, { wch: 22 }, { wch: 18 }, { wch: 20 }];
+  XLSX.utils.book_append_sheet(wb, ws, 'Conciliación bancaria');
+}
+
 function addSheet(wb: XLSX.WorkBook, name: string, rows: Record<string, unknown>[]) {
   const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ 'Sin registros': '' }]);
   ws['!cols'] = autoWidths(rows);
@@ -196,6 +259,8 @@ export function buildWorkbook(ctx: ExportContext, sections: ExportSection[]): XL
       { Indicador: 'Egresos contabilidad', Valor: kpis.egresosContables },
     ]);
   }
+
+  if (sections.includes('partidas')) addStatementSheet(wb, ctx);
 
   if (sections.includes('completa')) addSheet(wb, 'Conciliación completa', allRows);
 

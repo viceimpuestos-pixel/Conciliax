@@ -17,6 +17,7 @@ import { topThirdPartiesByDifference, topThirdPartiesByValue } from '../../core/
 import { formatDate } from '../../core/normalize/dates';
 import { formatMoney, formatNumber, formatPercent, parseMoney } from '../../core/normalize/money';
 import type { SaldoOrigen } from '../../core/analytics/kpis';
+import { StatementModal } from '../components/StatementModal';
 import {
   Card,
   Help,
@@ -58,6 +59,7 @@ export function DashboardPage() {
 
   const cuadra = Math.abs(kpis.diferencia) < 1;
   const explicada = Math.abs(kpis.diferenciaSinExplicar) < 1;
+  const [showStatement, setShowStatement] = React.useState(false);
   const pendientes = kpis.probables + kpis.pendientes + kpis.difValor + kpis.difFecha;
   const criticas = alerts.filter((a) => a.severity === 'critica').length;
 
@@ -114,13 +116,20 @@ export function DashboardPage() {
           foot={
             cuadra ? (
               'Los saldos cuadran'
-            ) : explicada ? (
-              <>
-                Explicada por {formatNumber(kpis.partidasBanco + kpis.partidasContables)} partidas conciliatorias
-              </>
             ) : (
               <>
-                Sin explicar: <strong>{formatMoney(kpis.diferenciaSinExplicar, true)}</strong>
+                {explicada ? (
+                  <>Explicada por {formatNumber(kpis.partidasBanco + kpis.partidasContables)} partidas conciliatorias</>
+                ) : (
+                  <>Sin explicar: <strong>{formatMoney(kpis.diferenciaSinExplicar, true)}</strong></>
+                )}
+                {' · '}
+                <button
+                  style={{ background: 'none', border: 0, padding: 0, color: 'inherit', textDecoration: 'underline', cursor: 'pointer', font: 'inherit' }}
+                  onClick={() => setShowStatement(true)}
+                >
+                  ver partidas
+                </button>
               </>
             )
           }
@@ -146,6 +155,8 @@ export function DashboardPage() {
           }
         />
       </div>
+
+      <StatementModal open={showStatement} onClose={() => setShowStatement(false)} />
 
       {/* ---------- Bloque 2: volúmenes ---------- */}
       <div className="kpi-grid">
