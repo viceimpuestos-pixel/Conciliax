@@ -50,6 +50,12 @@ export interface Tolerances {
   descriptionMin: number;
   /** Similitud mínima de nombre de tercero para otorgar puntos (0..1). */
   nameMin: number;
+  /**
+   * Diferencia en pesos que se considera redondeo (centavos) y no una
+   * diferencia de valor real. Opcional por compatibilidad con configuraciones
+   * guardadas antes de existir (por defecto $1).
+   */
+  roundingAbsolute?: number;
 }
 
 export interface Thresholds {
@@ -71,6 +77,20 @@ export interface EngineOptions {
   flagAmbiguous: boolean;
   /** Máximo de candidatos evaluados por movimiento bancario. */
   maxCandidates: number;
+  /**
+   * Cruces agrupados: varios movimientos bancarios contra un solo registro
+   * contable (gastos bancarios del mes, pagos PSE consolidados) y viceversa.
+   * Opcional por compatibilidad (por defecto activado).
+   */
+  groupMatching?: boolean;
+  /** Ventana en días para buscar los movimientos que componen un grupo (por defecto 7). */
+  groupWindowDays?: number;
+  /**
+   * Valor exacto (± redondeo) + fecha dentro del rango + candidato único se
+   * considera CONCILIADO aunque el score no llegue al umbral (el extracto
+   * casi nunca trae NIT ni el nombre completo). Por defecto activado.
+   */
+  autoConciliarValorExacto?: boolean;
 }
 
 export interface ReconciliationConfig {
@@ -102,6 +122,7 @@ export const DEFAULT_CONFIG: ReconciliationConfig = {
     maxDateDays: 30,
     descriptionMin: 0.4,
     nameMin: 0.7,
+    roundingAbsolute: 1,
   },
   thresholds: {
     conciliado: 90,
@@ -112,6 +133,9 @@ export const DEFAULT_CONFIG: ReconciliationConfig = {
     requireDirectionMatch: true,
     flagAmbiguous: true,
     maxCandidates: 25,
+    groupMatching: true,
+    groupWindowDays: 7,
+    autoConciliarValorExacto: true,
   },
 };
 
@@ -138,6 +162,7 @@ export const CONFIG_PRESETS: { id: string; name: string; description: string; co
         maxDateDays: 10,
         descriptionMin: 0.5,
         nameMin: 0.8,
+        roundingAbsolute: 0.5,
       },
       thresholds: { conciliado: 95, probable: 80, revision: 60 },
     },
@@ -157,8 +182,10 @@ export const CONFIG_PRESETS: { id: string; name: string; description: string; co
         maxDateDays: 60,
         descriptionMin: 0.3,
         nameMin: 0.6,
+        roundingAbsolute: 5,
       },
       thresholds: { conciliado: 85, probable: 65, revision: 45 },
+      options: { ...DEFAULT_CONFIG.options, groupWindowDays: 15 },
     },
   },
 ];

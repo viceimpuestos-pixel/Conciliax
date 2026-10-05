@@ -57,6 +57,34 @@ function str(row: unknown[], mapping: ColumnMapping, key: string): string {
 
 const TOTAL_ROW = /^(TOTAL|TOTALES|SUBTOTAL|SUMA|SUMAS|SALDO FINAL|SALDO INICIAL|GRAN TOTAL)\b/;
 
+const OPENING_ROW = /^SALDO (INICIAL|ANTERIOR)\b/;
+
+/** ¿La fila es la de saldo inicial / anterior del período? */
+function isOpeningRow(row: unknown[]): boolean {
+  return row.some((c) => typeof c === 'string' && OPENING_ROW.test(normalizeText(c)));
+}
+
+/**
+ * Saldo inicial leído de la fila "SALDO INICIAL": se prefiere la columna de
+ * saldo; si no está mapeada, el neto débito/crédito de la fila.
+ */
+function openingFromRow(
+  row: unknown[],
+  mapping: ColumnMapping,
+  hint: DecimalHint,
+  net: (debit: number, credit: number) => number,
+): number | null {
+  const bal = cell(row, mapping, 'balance');
+  if (bal !== null && String(bal).trim() !== '') {
+    const v = parseMoney(bal, hint);
+    if (Number.isFinite(v)) return round2(v);
+  }
+  const debit = Math.abs(parseMoney(cell(row, mapping, 'debit'), hint));
+  const credit = Math.abs(parseMoney(cell(row, mapping, 'credit'), hint));
+  if (debit || credit) return round2(net(debit, credit));
+  return null;
+}
+
 function looksLikeTotal(row: unknown[]): boolean {
   const nonEmpty = row.filter((c) => c !== null && c !== undefined && String(c).trim() !== '');
   if (!nonEmpty.length) return true;
@@ -97,9 +125,10 @@ function resolveAmounts(
 }
 
 function computeStats(
-  rows: { date: Date | null; debit: number; credit: number; thirdPartyId?: string; thirdPartyName?: string }[],
+  rows: { date: Date | null; debit: number; credit: number; amount: number; thirdPartyId?: string; thirdPartyName?: string }[],
   total: number,
   duplicates: number,
+  openingBalance: number | null = null,
 ): DatasetStats {
   let minDate: Date | null = null;
   let maxDate: Date | null = null;
@@ -126,9 +155,12 @@ function computeStats(
     maxDate,
     totalDebit: round2(totalDebit),
     totalCredit: round2(totalCredit),
-    net: round2(totalCredit - totalDebit),
+    // Neto según la convención de signo de cada movimiento (amount): en el
+    // extracto, crédito − débito; en el auxiliar de bancos, débito − crédito.
+    net: round2(rows.reduce((acc, r) => acc + r.amount, 0)),
     duplicates,
     distinctThirdParties: parties.size,
+    openingBalance,
   };
 }
 
@@ -171,8 +203,12 @@ export function buildBankDataset(
   const noDate: number[] = [];
   const noAmount: number[] = [];
   let discardedTotals = 0;
+  let openingBalance: number | null = null;
 
   sheet.rows.forEach((row, i) => {
+    if (openingBalance === null && isOpeningRow(row)) {
+      openingBalance = openingFromRow(row, mapping, opts.decimalHint, (d, c) => c - d);
+    }
     if (opts.dropTotals && looksLikeTotal(row)) {
       discardedTotals++;
       return;
@@ -207,11 +243,27 @@ export function buildBankDataset(
     });
   });
 
+  // La referencia / número de transacción entran en la llave: si el banco le
+  // asignó a cada movimiento un consecutivo distinto, no es un doble registro
+  // aunque coincidan fecha, valor y descripción (p. ej. IVA de comisiones).
   const dupIdx = markDuplicates(
     rows.map((r) =>
-      [r.date?.getTime() ?? 'nd', r.amount, normalizeText(r.description).slice(0, 40), r.document].join('|'),
+      [
+        r.date?.getTime() ?? 'nd',
+        r.amount,
+        normalizeText(r.description).slice(0, 40),
+        r.document,
+        r.reference,
+        r.transactionNumber,
+      ].join('|'),
     ),
   );
+
+  // Sin fila de saldo inicial pero con columna de saldo: saldo antes del primer movimiento.
+  if (openingBalance === null) {
+    const first = rows.find((r) => r.balance !== null && Number.isFinite(r.balance));
+    if (first) openingBalance = round2((first.balance as number) - first.amount);
+  }
 
   if (noDate.length) {
     issues.push({
@@ -264,7 +316,7 @@ export function buildBankDataset(
     mapping,
     headers: sheet.headers,
     issues,
-    stats: computeStats(rows, sheet.rows.length, dupIdx.size),
+    stats: computeStats(rows, sheet.rows.length, dupIdx.size, openingBalance),
   };
 }
 
@@ -286,8 +338,12 @@ export function buildLedgerDataset(
   let discardedTotals = 0;
 
   const debitIsInflow = opts.ledgerSign === 'debito-ingreso';
+  let openingBalance: number | null = null;
 
   sheet.rows.forEach((row, i) => {
+    if (openingBalance === null && isOpeningRow(row)) {
+      openingBalance = openingFromRow(row, mapping, opts.decimalHint, (d, c) => (debitIsInflow ? d - c : c - d));
+    }
     if (opts.dropTotals && looksLikeTotal(row)) {
       discardedTotals++;
       return;
@@ -400,7 +456,7 @@ export function buildLedgerDataset(
     mapping,
     headers: sheet.headers,
     issues,
-    stats: computeStats(rows, sheet.rows.length, dupIdx.size),
+    stats: computeStats(rows, sheet.rows.length, dupIdx.size, openingBalance),
   };
 }
 

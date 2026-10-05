@@ -21,6 +21,9 @@ import { EMPTY_OVERRIDES } from '../types';
 import type { ReconciliationConfig } from './config';
 import { scorePair, type PairScore } from './scoring';
 import { normalizeText } from '../normalize/text';
+import { round2 } from '../normalize/money';
+import { daysBetween } from '../normalize/dates';
+import { findGroups, type GroupFound } from './grouping';
 
 export interface CandidateSuggestion {
   ledgerId: string;
@@ -116,7 +119,8 @@ function classify(
   ambiguous: boolean,
 ): MatchStatus {
   const th = cfg.thresholds;
-  const significantDiff = Math.abs(amountDiff) > 0.01;
+  // Diferencias de centavos (redondeo del banco) no son diferencias de valor.
+  const significantDiff = Math.abs(amountDiff) > roundingOf(cfg);
   const farDate = daysDiff !== null && Math.abs(daysDiff) > cfg.tolerances.dateWindowDays;
 
   if (score < th.revision) return 'NO_CONCILIADO';
@@ -125,8 +129,16 @@ function classify(
   if (farDate) return 'DIF_FECHA';
 
   if (score >= th.conciliado) return ambiguous ? 'REVISION' : 'CONCILIADO';
+  // Valor exacto (± redondeo), fecha dentro del rango y candidato único: es el
+  // mismo movimiento aunque el extracto no traiga NIT ni nombre completo
+  // (p. ej. PSE registrado un día después).
+  if ((cfg.options.autoConciliarValorExacto ?? true) && score >= th.probable && !ambiguous) return 'CONCILIADO';
   if (score >= th.probable) return 'PROBABLE';
   return 'REVISION';
+}
+
+export function roundingOf(cfg: ReconciliationConfig): number {
+  return cfg.tolerances.roundingAbsolute ?? 1;
 }
 
 /* ------------------------------------------------------------------ */
@@ -280,24 +292,44 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
   });
 
   // Detección de ambigüedad: un bancario con dos candidatos de puntaje idéntico.
-  const topScoreByBank = new Map<string, number[]>();
+  const candidatesByBank = new Map<string, Pair[]>();
   for (const p of pairs) {
     const id = bank[p.bankIdx].id;
-    const list = topScoreByBank.get(id) ?? [];
-    list.push(p.s.score);
-    topScoreByBank.set(id, list);
+    const list = candidatesByBank.get(id) ?? [];
+    list.push(p);
+    candidatesByBank.set(id, list);
   }
+  /**
+   * Dos candidatos empatados sólo son una ambigüedad real si son distintos.
+   * Si tienen el mismo valor, fecha y tercero (p. ej. dos tasas idénticas de
+   * INVIMA pagadas el mismo día) son intercambiables: cualquier asignación
+   * deja la conciliación igual de correcta, no hay nada que revisar.
+   */
+  const fungibleKey = (l: LedgerTx) =>
+    [l.amount, l.date ? l.date.toDateString() : 'nd', l.thirdPartyId || normalizeText(l.thirdPartyName)].join('|');
 
-  for (const p of pairs) {
+  /**
+   * Movimientos bancarios idénticos (mismo valor y fecha) compiten por los
+   * mismos candidatos. Si hay tantos bancarios como candidatos empatados, todos
+   * quedan cruzados sea cual sea la asignación: no hay ambigüedad que revisar.
+   */
+  const twinKey = (b: BankTx) => b.amount + '|' + (b.date ? b.date.toDateString() : 'nd');
+  const twins = new Map<string, number>();
+  for (const b of bank) twins.set(twinKey(b), (twins.get(twinKey(b)) ?? 0) + 1);
+
+  const rounding = roundingOf(cfg);
+  const deferred: Pair[] = [];
+
+  const assign = (p: Pair) => {
     const b = bank[p.bankIdx];
     const l = ledger[p.ledgerIdx];
-    if (takenBank.has(b.id) || takenLedger.has(l.id)) continue;
-    if (p.s.score < cfg.thresholds.revision) continue;
 
-    const scores = topScoreByBank.get(b.id) ?? [];
+    const tied = (candidatesByBank.get(b.id) ?? []).filter((c) => Math.abs(c.s.score - p.s.score) < 0.05);
     const ambiguous =
       cfg.options.flagAmbiguous &&
-      scores.filter((s) => Math.abs(s - p.s.score) < 0.05).length > 1;
+      tied.length > 1 &&
+      tied.length > (twins.get(twinKey(b)) ?? 1) &&
+      new Set(tied.map((c) => fungibleKey(ledger[c.ledgerIdx]))).size > 1;
 
     const status = classify(p.s.score, p.s.amountDiff, p.s.daysDiff, cfg, ambiguous);
 
@@ -320,9 +352,46 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
         ? p.s.explanation + ' Requiere revisión: hay varios candidatos equivalentes.'
         : p.s.explanation,
     });
+  };
+
+  for (const p of pairs) {
+    const b = bank[p.bankIdx];
+    const l = ledger[p.ledgerIdx];
+    if (takenBank.has(b.id) || takenLedger.has(l.id)) continue;
+    if (p.s.score < cfg.thresholds.revision) continue;
+    // Los pares con diferencia de valor se asignan después de buscar cruces
+    // agrupados: un registro contable que es la suma exacta de varios
+    // movimientos bancarios no debe quedar atado a uno solo "parecido".
+    if (Math.abs(p.s.amountDiff) > rounding) {
+      deferred.push(p);
+      continue;
+    }
+    assign(p);
   }
 
-  /* --- 5. Índices y estados finales --------------------------------- */
+  /* --- 5. Cruces agrupados (N:1, 1:N, gastos bancarios, bloques) ----- */
+
+  if (cfg.options.groupMatching ?? true) {
+    const groups = findGroups({
+      bank,
+      ledger,
+      takenBank: new Set([...takenBank, ...ignoredBank]),
+      takenLedger: new Set([...takenLedger, ...ignoredLedger]),
+      rejected,
+      roundingAbsolute: roundingOf(cfg),
+      windowDays: cfg.options.groupWindowDays ?? 7,
+    });
+    groups.forEach((g, gi) => {
+      for (const m of groupMatches(g, 'G' + (gi + 1), bankById, ledgerById, cfg, matches.length)) pushMatch(m);
+    });
+  }
+
+  for (const p of deferred) {
+    if (takenBank.has(bank[p.bankIdx].id) || takenLedger.has(ledger[p.ledgerIdx].id)) continue;
+    assign(p);
+  }
+
+  /* --- 6. Índices y estados finales --------------------------------- */
 
   const byBank = new Map<string, Match>();
   const byLedger = new Map<string, Match>();
@@ -331,8 +400,17 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
     byLedger.set(m.ledgerId, m);
   }
 
-  const dupBank = duplicateIds(bank, (b) => b.document);
-  const dupLedger = duplicateIds(ledger, (l) => l.thirdPartyId + l.documentNumber);
+  // Un movimiento repetido sólo es sospechoso si quedó sin contrapartida: si
+  // las dos copias se cruzaron con dos registros distintos, son operaciones
+  // reales (tasas o comisiones del mismo valor el mismo día).
+  const dupBank = new Set(
+    [...duplicateIds(bank, (b) => [b.document, b.reference, b.transactionNumber].join('|'))].filter(
+      (id) => !byBank.has(id),
+    ),
+  );
+  const dupLedger = new Set(
+    [...duplicateIds(ledger, (l) => l.thirdPartyId + l.documentNumber)].filter((id) => !byLedger.has(id)),
+  );
 
   const bankStatus = new Map<string, MatchStatus>();
   const ledgerStatus = new Map<string, MatchStatus>();
@@ -385,6 +463,56 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
 
   lastSuggestions = suggestions;
   return result;
+}
+
+const GROUP_LABEL: Record<GroupFound['kind'], string> = {
+  GASTOS_BANCARIOS: 'Gastos bancarios del mes (4x1000, IVA, comisiones) contra su asiento contable',
+  VARIOS_BANCO: 'Varios movimientos bancarios suman exactamente un registro contable',
+  VARIOS_CONTABLE: 'Varios registros contables suman exactamente un movimiento bancario',
+  BLOQUE_TERCERO: 'Los movimientos pendientes del mismo tercero suman lo mismo en banco y contabilidad',
+};
+
+/**
+ * Convierte un grupo en filas Match. Cada movimiento del grupo (de ambos
+ * lados) queda en al menos una fila, todas con el mismo groupId. La diferencia
+ * de valor del grupo se reporta una sola vez (primera fila) para que las sumas
+ * de diferencias no se dupliquen.
+ */
+function groupMatches(
+  g: GroupFound,
+  groupId: string,
+  bankById: Map<string, BankTx>,
+  ledgerById: Map<string, LedgerTx>,
+  cfg: ReconciliationConfig,
+  offset: number,
+): Match[] {
+  const bs = g.bankIds.map((id) => bankById.get(id)!);
+  const ls = g.ledgerIds.map((id) => ledgerById.get(id)!);
+  const diff = round2(bs.reduce((a, b) => a + b.amount, 0) - ls.reduce((a, l) => a + l.amount, 0));
+  const status: MatchStatus = Math.abs(diff) <= roundingOf(cfg) ? 'CONCILIADO' : 'DIF_VALOR';
+  const label =
+    GROUP_LABEL[g.kind] + ' (' + bs.length + ' bancario' + (bs.length === 1 ? '' : 's') + ' · ' +
+    ls.length + ' contable' + (ls.length === 1 ? '' : 's') + ')';
+  const n = Math.max(bs.length, ls.length);
+  const out: Match[] = [];
+  for (let i = 0; i < n; i++) {
+    const b = bs[Math.min(i, bs.length - 1)];
+    const l = ls[Math.min(i, ls.length - 1)];
+    out.push({
+      id: 'M' + (offset + out.length + 1),
+      bankId: b.id,
+      ledgerId: l.id,
+      score: 100,
+      status,
+      reasons: [{ code: 'GRUPO_' + g.kind, label, points: 100 }],
+      amountDiff: i === 0 ? diff : 0,
+      daysDiff: daysBetween(b.date, l.date),
+      origin: 'auto',
+      explanation: 'Cruce agrupado ' + groupId + ': ' + label + '.',
+      groupId,
+    });
+  }
+  return out;
 }
 
 /**

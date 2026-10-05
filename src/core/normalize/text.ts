@@ -20,12 +20,23 @@ export function deaccent(s: string): string {
  */
 export function normalizeText(input: unknown): string {
   if (input === null || input === undefined) return '';
-  let s = String(input);
+  const raw = String(input);
+  // El motor normaliza los mismos textos miles de veces (cada par candidato):
+  // memorizar el resultado reduce el tiempo de conciliación a una fracción.
+  const hit = normCache.get(raw);
+  if (hit !== undefined) return hit;
+  let s = raw;
   if (!s.trim()) return '';
   s = deaccent(s).toUpperCase();
   s = s.replace(/[^A-Z0-9ÑÜ\s]/g, ' ');
-  return s.replace(/\s+/g, ' ').trim();
+  s = s.replace(/\s+/g, ' ').trim();
+  if (normCache.size >= NORM_CACHE_MAX) normCache.clear();
+  normCache.set(raw, s);
+  return s;
 }
+
+const NORM_CACHE_MAX = 50_000;
+const normCache = new Map<string, string>();
 
 /** Palabras vacías y ruido típico de extractos y auxiliares contables. */
 const STOPWORDS = new Set([

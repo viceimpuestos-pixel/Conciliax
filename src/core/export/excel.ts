@@ -160,6 +160,18 @@ export function buildWorkbook(ctx: ExportContext, sections: ExportSection[]): XL
       { Indicador: 'Saldo según banco', Valor: kpis.saldoBanco },
       { Indicador: 'Saldo según contabilidad', Valor: kpis.saldoContable },
       { Indicador: 'Diferencia banco - contabilidad', Valor: kpis.diferencia },
+      { Indicador: 'Explicada por partidas conciliatorias', Valor: kpis.diferenciaExplicada },
+      { Indicador: 'Diferencia sin explicar', Valor: kpis.diferenciaSinExplicar },
+      {
+        Indicador: 'Origen del saldo bancario',
+        Valor:
+          kpis.saldoBancoOrigen === 'extracto'
+            ? 'Saldo final del extracto'
+            : kpis.saldoBancoOrigen === 'neto'
+              ? 'Neto de movimientos (sin saldo inicial)'
+              : 'Saldo inicial ' + (kpis.saldoInicialBanco ?? 0) +
+                (kpis.saldoBancoOrigen === 'supuesto' ? ' (asumido igual al auxiliar)' : '') + ' + movimientos',
+      },
       { Indicador: '', Valor: '' },
       { Indicador: 'Total movimientos bancarios', Valor: kpis.totalMovBanco },
       { Indicador: 'Total movimientos contables', Valor: kpis.totalMovContable },

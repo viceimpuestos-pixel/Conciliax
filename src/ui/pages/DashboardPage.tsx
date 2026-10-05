@@ -15,7 +15,8 @@ import {
 } from '../../state/selectors';
 import { topThirdPartiesByDifference, topThirdPartiesByValue } from '../../core/analytics/aggregations';
 import { formatDate } from '../../core/normalize/dates';
-import { formatMoney, formatNumber, formatPercent } from '../../core/normalize/money';
+import { formatMoney, formatNumber, formatPercent, parseMoney } from '../../core/normalize/money';
+import type { SaldoOrigen } from '../../core/analytics/kpis';
 import {
   Card,
   Help,
@@ -56,6 +57,7 @@ export function DashboardPage() {
   const ledgerFile = useStore((s) => s.ledger.fileName);
 
   const cuadra = Math.abs(kpis.diferencia) < 1;
+  const explicada = Math.abs(kpis.diferenciaSinExplicar) < 1;
   const pendientes = kpis.probables + kpis.pendientes + kpis.difValor + kpis.difFecha;
   const criticas = alerts.filter((a) => a.severity === 'critica').length;
 
@@ -85,12 +87,13 @@ export function DashboardPage() {
           tone="navy"
           label="Saldo según banco"
           value={formatMoney(kpis.saldoBanco)}
-          foot={
-            kpis.saldoBancoEsNeto
-              ? 'Neto de movimientos (el extracto no trae columna de saldo)'
-              : 'Saldo final del extracto'
-          }
+          foot={<BankBalanceFoot origen={kpis.saldoBancoOrigen} inicial={kpis.saldoInicialBanco} />}
           icon={<IconBank size={13} />}
+          help={
+            kpis.saldoBancoOrigen === 'supuesto'
+              ? 'El extracto no trae columna de saldo. Se calcula como saldo inicial + movimientos del período, asumiendo que el saldo inicial del banco es igual al del auxiliar. Si el extracto oficial muestra otro saldo inicial, edítelo aquí.'
+              : undefined
+          }
         />
         <Kpi
           tone="blue"
@@ -104,13 +107,30 @@ export function DashboardPage() {
           icon={<IconFile size={13} />}
         />
         <Kpi
-          tone={cuadra ? 'green' : 'red'}
+          tone={cuadra ? 'green' : explicada ? 'amber' : 'red'}
           label="Diferencia banco − contabilidad"
           value={formatMoney(kpis.diferencia)}
           valueClass={cuadra ? 'value-pos' : 'value-neg'}
-          foot={cuadra ? 'Los saldos cuadran' : 'Requiere partidas conciliatorias'}
-          icon={cuadra ? <IconCheck size={13} /> : <IconAlert size={13} />}
-          help="Diferencia entre el saldo del extracto y el saldo del auxiliar. Se explica con las partidas conciliatorias: movimientos del banco no registrados y registros contables no reflejados en el banco."
+          foot={
+            cuadra ? (
+              'Los saldos cuadran'
+            ) : explicada ? (
+              <>
+                Explicada por {formatNumber(kpis.partidasBanco + kpis.partidasContables)} partidas conciliatorias
+              </>
+            ) : (
+              <>
+                Sin explicar: <strong>{formatMoney(kpis.diferenciaSinExplicar, true)}</strong>
+              </>
+            )
+          }
+          icon={cuadra || explicada ? <IconCheck size={13} /> : <IconAlert size={13} />}
+          help={
+            'Diferencia entre el saldo del extracto y el saldo del auxiliar. Se explica con las partidas conciliatorias: ' +
+            formatNumber(kpis.partidasBanco) + ' movimiento(s) del banco sin registrar, ' +
+            formatNumber(kpis.partidasContables) + ' registro(s) contable(s) sin reflejo en el banco y diferencias de valor en los cruces. ' +
+            'Explicado: ' + formatMoney(kpis.diferenciaExplicada, true) + ' · Sin explicar: ' + formatMoney(kpis.diferenciaSinExplicar, true) + '.'
+          }
         />
         <Kpi
           tone={kpis.porcentajeConciliacion >= 90 ? 'green' : kpis.porcentajeConciliacion >= 70 ? 'amber' : 'red'}
@@ -130,7 +150,7 @@ export function DashboardPage() {
       {/* ---------- Bloque 2: volúmenes ---------- */}
       <div className="kpi-grid">
         <Kpi tone="grey" label="Movimientos bancarios" value={formatNumber(kpis.totalMovBanco)} foot={<>Ingresos <strong>{formatMoney(kpis.ingresosBanco)}</strong></>} />
-        <Kpi tone="grey" label="Movimientos contables" value={formatNumber(kpis.totalMovContable)} foot={<>Egresos <strong>{formatMoney(kpis.egresosBanco)}</strong></>} />
+        <Kpi tone="grey" label="Movimientos contables" value={formatNumber(kpis.totalMovContable)} foot={<>Egresos <strong>{formatMoney(kpis.egresosContables)}</strong></>} />
         <Kpi
           tone="green"
           label="Conciliados"
@@ -287,6 +307,63 @@ export function DashboardPage() {
 }
 
 /* ------------------------------------------------------------------ */
+
+/** Pie de la tarjeta de saldo bancario: de dónde sale el saldo y edición del saldo inicial. */
+function BankBalanceFoot({ origen, inicial }: { origen: SaldoOrigen; inicial: number | null }) {
+  const manual = useStore((s) => s.bankOpeningBalance);
+  const setOpening = useStore((s) => s.setBankOpeningBalance);
+  const [editing, setEditing] = React.useState(false);
+  const [text, setText] = React.useState('');
+
+  if (origen === 'extracto') return <>Saldo final del extracto</>;
+
+  if (editing) {
+    const save = () => {
+      const v = parseMoney(text);
+      setOpening(text.trim() === '' || !Number.isFinite(v) ? null : v);
+      setEditing(false);
+    };
+    return (
+      <span className="row" style={{ gap: 6 }} onClick={(e) => e.stopPropagation()}>
+        <input
+          autoFocus
+          style={{ width: 150 }}
+          placeholder="Saldo inicial banco"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') save();
+            if (e.key === 'Escape') setEditing(false);
+          }}
+        />
+        <button className="btn sm" onClick={save}>Guardar</button>
+        {manual !== null && (
+          <button className="btn sm" onClick={() => { setOpening(null); setEditing(false); }}>
+            Usar el del auxiliar
+          </button>
+        )}
+      </span>
+    );
+  }
+
+  const edit = (
+    <button
+      className="link"
+      style={{ background: 'none', border: 0, padding: 0, color: 'inherit', textDecoration: 'underline', cursor: 'pointer' }}
+      onClick={() => { setText(inicial !== null ? String(inicial) : ''); setEditing(true); }}
+    >
+      editar
+    </button>
+  );
+
+  if (origen === 'neto') return <>Neto de movimientos (sin saldo inicial) · {edit}</>;
+  return (
+    <>
+      Saldo inicial {formatMoney(inicial ?? 0)}
+      {origen === 'supuesto' ? ' (asumido = auxiliar)' : manual !== null ? ' (digitado)' : ''} + movimientos · {edit}
+    </>
+  );
+}
 
 function Kpi({
   label,

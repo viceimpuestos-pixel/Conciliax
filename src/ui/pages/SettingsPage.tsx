@@ -175,6 +175,19 @@ export function SettingsPage() {
                 />
               </Field>
 
+              <Field
+                label={<span className="row" style={{ gap: 5 }}>Redondeo ($) <Help text="Diferencias de hasta este valor (centavos del banco) no se tratan como diferencia de valor." /></span>}
+                width="sm"
+              >
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={config.tolerances.roundingAbsolute ?? 1}
+                  onChange={(e) => update((c) => { c.tolerances.roundingAbsolute = Number(e.target.value); })}
+                />
+              </Field>
+
               <Field label="Diferencia porcentual (%)" width="sm">
                 <input
                   type="number"
@@ -261,6 +274,16 @@ export function SettingsPage() {
                 checked={config.options.flagAmbiguous}
                 onChange={(v) => update((c) => { c.options.flagAmbiguous = v; })}
                 label="Marcar como revisión cuando hay varios candidatos con el mismo puntaje"
+              />
+              <Switch
+                checked={config.options.autoConciliarValorExacto ?? true}
+                onChange={(v) => update((c) => { c.options.autoConciliarValorExacto = v; })}
+                label="Conciliar automáticamente valor exacto + fecha dentro del rango + candidato único (aunque el score no llegue al umbral)"
+              />
+              <Switch
+                checked={config.options.groupMatching ?? true}
+                onChange={(v) => update((c) => { c.options.groupMatching = v; })}
+                label="Cruces agrupados: varios movimientos contra un solo registro (gastos bancarios del mes, pagos consolidados)"
               />
             </div>
           </Card>

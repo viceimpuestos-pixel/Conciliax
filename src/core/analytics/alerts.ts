@@ -139,7 +139,8 @@ export function buildAlerts(
     const l = ledgerById.get(m.ledgerId);
     if (!b || !l) continue;
 
-    if (Math.abs(m.amountDiff) > 0.01) {
+    // Un cruce CONCILIADO con diferencia sólo puede ser de centavos (redondeo).
+    if (Math.abs(m.amountDiff) > 0.01 && m.status !== 'CONCILIADO') {
       const abs = Math.abs(m.amountDiff);
       push({
         kind: 'DIFERENCIA_VALOR',
