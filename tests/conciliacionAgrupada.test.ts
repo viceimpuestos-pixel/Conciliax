@@ -159,3 +159,20 @@ describe('saldos y diferencia explicada', () => {
     expect(ds.stats.duplicates).toBe(0);
   });
 });
+
+describe('estado de conciliación', () => {
+  it('va del saldo en libros al saldo en banco partida por partida', async () => {
+    const { buildStatement } = await import('../src/core/analytics/statement');
+    const bank = [B(1, 'PAGO DE PROV CLIENTE', 500), B(2, 'PAGO PSE PROVEEDOR', -200), B(3, 'CHEQUE GIRADO', -50)];
+    const ledger = [L(1, 'CLIENTE', 500), L(2, 'PROVEEDOR', -200), L(30, 'OTRO PROVEEDOR', -80)];
+    ledger[2].balance = 1220;
+    const r = reconcile({ bank, ledger, config: DEFAULT_CONFIG });
+    const k = computeKpis(bank, ledger, r, { ledgerOpening: 1000 });
+    const st = buildStatement(bank, ledger, r, k);
+    expect(st.saldoLibros).toBe(1220);
+    expect(st.sections.find((s) => s.id === 'bancoDebitos')!.total).toBe(50);
+    expect(st.sections.find((s) => s.id === 'libroEgresos')!.total).toBe(80);
+    expect(st.saldoBancoConciliado).toBe(1250);
+    expect(st.sinExplicar).toBe(0);
+  });
+});
