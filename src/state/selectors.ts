@@ -55,7 +55,14 @@ export function useKpis(): Kpis {
   const bank = useBankRows();
   const ledger = useLedgerRows();
   const result = useResult();
-  return useMemo(() => computeKpis(bank, ledger, result), [bank, ledger, result]);
+  const fileBankOpening = useStore((s) => s.bankDataset?.stats.openingBalance ?? null);
+  const manualBankOpening = useStore((s) => s.bankOpeningBalance);
+  const ledgerOpening = useStore((s) => s.ledgerDataset?.stats.openingBalance ?? null);
+  const bankOpening = manualBankOpening ?? fileBankOpening;
+  return useMemo(
+    () => computeKpis(bank, ledger, result, { bankOpening, ledgerOpening }),
+    [bank, ledger, result, bankOpening, ledgerOpening],
+  );
 }
 
 export function useThirdParties(): ThirdPartySummary[] {

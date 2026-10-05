@@ -105,6 +105,12 @@ export interface Match {
   origin: 'auto' | 'manual';
   /** Explicación legible: "Valor exacto + mismo tercero + 2 días de diferencia". */
   explanation: string;
+  /**
+   * Cruces agrupados (varios movimientos bancarios contra un registro contable,
+   * o al revés): todas las filas del grupo comparten este id. La diferencia de
+   * valor del grupo se reporta sólo en la primera fila (las demás llevan 0).
+   */
+  groupId?: string;
 }
 
 /** Resultado completo de una corrida del motor. */
@@ -246,6 +252,12 @@ export interface DatasetStats {
   net: number;
   duplicates: number;
   distinctThirdParties: number;
+  /**
+   * Saldo inicial del período, si el archivo lo trae (fila "SALDO INICIAL" /
+   * "SALDO ANTERIOR"). Para el extracto también se deduce de la primera fila
+   * con saldo. null = el archivo no lo informa.
+   */
+  openingBalance: number | null;
 }
 
 /* ==================================================================== */

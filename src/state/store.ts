@@ -105,6 +105,12 @@ interface AppState {
 
   bankDataset: Dataset<BankTx> | null;
   ledgerDataset: Dataset<LedgerTx> | null;
+  /**
+   * Saldo inicial del extracto digitado por el usuario (cuando el archivo no
+   * trae columna de saldo). null = usar el del archivo o asumir el del auxiliar.
+   */
+  bankOpeningBalance: number | null;
+  setBankOpeningBalance: (v: number | null) => void;
 
   progress: Progress | null;
   error: string | null;
@@ -310,8 +316,15 @@ export const useStore = create<AppState>((set, get) => ({
     set({ section: 'dashboard', wizardStep: 8 });
   },
 
+  bankOpeningBalance: null,
+  setBankOpeningBalance: (v) => {
+    set({ bankOpeningBalance: v });
+    get().log('Saldo inicial del banco', v === null ? 'Se usa el saldo inicial del auxiliar' : String(v));
+  },
+
   clearAll() {
     set({
+      bankOpeningBalance: null,
       bank: emptySlot(),
       ledger: emptySlot(),
       bankDataset: null,

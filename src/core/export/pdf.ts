@@ -58,9 +58,12 @@ export function exportPdf(ctx: ExportContext, opts: PdfOptions = {}): string {
     { label: 'Saldo según banco', value: formatMoney(k.saldoBanco), color: NAVY },
     { label: 'Saldo según contabilidad', value: formatMoney(k.saldoContable), color: BLUE },
     {
-      label: 'Diferencia',
+      label:
+        Math.abs(k.diferencia) >= 1 && Math.abs(k.diferenciaSinExplicar) < 1
+          ? 'Diferencia (explicada por partidas)'
+          : 'Diferencia',
       value: formatMoney(k.diferencia),
-      color: Math.abs(k.diferencia) < 1 ? GREEN : RED,
+      color: Math.abs(k.diferenciaSinExplicar) < 1 ? GREEN : RED,
     },
   ];
 

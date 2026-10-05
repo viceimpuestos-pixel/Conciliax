@@ -342,6 +342,7 @@ describe('configuración del algoritmo', () => {
     const { bank, ledger } = buildAll();
     const cfg = cloneConfig(DEFAULT_CONFIG);
     cfg.thresholds.conciliado = 99.9;
+    cfg.options.autoConciliarValorExacto = false;
     const a = reconcile({ bank: bank.rows, ledger: ledger.rows, config: DEFAULT_CONFIG });
     const b = reconcile({ bank: bank.rows, ledger: ledger.rows, config: cfg });
     const ka = computeKpis(bank.rows, ledger.rows, a);

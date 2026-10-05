@@ -68,8 +68,21 @@ Archivo → fileReader → RawSheet ─┘                                      
 1. **Bloqueo (blocking):** por valor absoluto redondeado ± tolerancia → evita O(n²) real.
 2. **Scoring por par:** 10 criterios ponderados → 0..100 + lista de razones.
 3. **Asignación global:** ordena todos los pares candidatos por score y asigna de forma greedy 1:1 (un movimiento bancario no puede conciliarse dos veces).
-4. **Clasificación:** CONCILIADO / PROBABLE / REVISIÓN / NO CONCILIADO / DUPLICADO / DIF. VALOR / DIF. FECHA.
-5. **Overlays manuales:** las decisiones del usuario (aceptar, rechazar, vincular, ignorar) se guardan aparte y se re-aplican tras cada re-ejecución.
+4. **Cruces agrupados (`grouping.ts`):** lo que queda sin cruce 1:1 se busca por suma exacta (± redondeo):
+   gastos bancarios del mes (4x1000, IVA, comisiones) contra su asiento, varios PSE contra un pago contable
+   (y al revés) y bloques por tercero. Siempre misma naturaleza, ventana de fechas y afinidad texto↔tercero
+   (incluye siglas: "DIAN" = Dirección de Impuestos y Aduanas Nacionales). Los pares 1:1 con diferencia de
+   valor se asignan después de esta etapa para no robarle partidas a un grupo exacto.
+5. **Clasificación:** CONCILIADO / PROBABLE / REVISIÓN / NO CONCILIADO / DUPLICADO / DIF. VALOR / DIF. FECHA.
+   Centavos de redondeo (`roundingAbsolute`) no son diferencia de valor; empates entre candidatos
+   intercambiables (mismo valor, fecha y tercero) no son ambigüedad.
+6. **Overlays manuales:** las decisiones del usuario (aceptar, rechazar, vincular, ignorar) se guardan aparte y se re-aplican tras cada re-ejecución.
+
+### Saldos
+El saldo del banco nunca se compara como neto contra un saldo final. Orden de preferencia: columna de saldo
+del extracto → saldo inicial (fila del archivo o digitado en el dashboard) + movimientos → saldo inicial del
+auxiliar (fila "SALDO INICIAL") + movimientos, marcado como supuesto → netos en ambos lados. Los KPIs
+reportan la diferencia explicada por partidas conciliatorias y la diferencia sin explicar.
 
 ## 5. Módulo DIAN vs. auxiliar
 
