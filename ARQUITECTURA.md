@@ -89,6 +89,14 @@ número de cuenta, saldo anterior y saldo actual (probado con Occidente, Agrario
 y el saldo inicial de cada una. El store elige automáticamente la cuenta del extracto por número de cuenta o
 banco (`guessLedgerAccount`) y filtra el auxiliar (`filterLedgerByAccount`); el usuario puede cambiarla.
 
+### Consolidado de bancos
+`analytics/consolidated.ts` (`reconcileAll`) concilia todos los extractos del mes contra el auxiliar multi-cuenta:
+asigna cada extracto a su cuenta, corre el mismo motor del modo detalle por cuenta y produce una fila por
+cuenta (saldos, diferencia, sin explicar, partidas, embargos) más hallazgos que sólo se ven juntos: cuentas
+sin extracto, extractos sin cuenta, dos extractos en una cuenta y embargos por el mismo valor en bancos
+distintos. Pantalla: `ui/pages/ConsolidatedPage.tsx`; "Ver detalle" carga la cuenta en el modo detalle.
+Exportación: `exportConsolidated` (resumen, hallazgos y una hoja de conciliación por cuenta).
+
 ### Saldos
 El saldo del banco nunca se compara como neto contra un saldo final. Orden de preferencia: columna de saldo
 del extracto → saldo inicial (fila del archivo o digitado en el dashboard) + movimientos → saldo inicial del

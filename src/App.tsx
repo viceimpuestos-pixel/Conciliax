@@ -15,16 +15,19 @@ import { AlertsPage } from './ui/pages/AlertsPage';
 import { ReportsPage } from './ui/pages/ReportsPage';
 import { SettingsPage } from './ui/pages/SettingsPage';
 import { DianPage } from './ui/pages/DianPage';
+import { ConsolidatedPage } from './ui/pages/ConsolidatedPage';
 
 export function App() {
   const section = useStore((s) => s.section);
   const hasData = useHasData();
 
   // Las secciones analíticas del módulo banco requieren su propia conciliación ejecutada.
-  const needsData = section !== 'importar' && section !== 'configuracion' && section !== 'dian';
+  const needsData = section !== 'importar' && section !== 'configuracion' && section !== 'dian' && section !== 'consolidado';
   const view = needsData && !hasData ? 'importar' : section;
 
   switch (view) {
+    case 'consolidado':
+      return <Shell><ConsolidatedPage /></Shell>;
     case 'dashboard':
       return <Shell><DashboardPage /></Shell>;
     case 'conciliacion':
