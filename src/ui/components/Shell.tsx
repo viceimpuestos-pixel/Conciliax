@@ -9,6 +9,7 @@ import {
   IconAlert,
   IconBell,
   IconBook,
+  IconBank,
   IconDashboard,
   IconFile,
   IconLink,
@@ -32,6 +33,7 @@ interface NavEntry {
 }
 
 const NAV: NavEntry[] = [
+  { id: 'consolidado', label: 'Consolidado bancos', icon: <IconBank />, group: 'Análisis' },
   { id: 'dashboard', label: 'Dashboard', icon: <IconDashboard />, group: 'Análisis', needsData: true },
   { id: 'conciliacion', label: 'Conciliación', icon: <IconLink />, group: 'Análisis', needsData: true },
   { id: 'alertas', label: 'Alertas', icon: <IconBell />, group: 'Análisis', needsData: true },
@@ -44,6 +46,7 @@ const NAV: NavEntry[] = [
 ];
 
 const TITLES: Record<Section, { title: string; crumb: string }> = {
+  consolidado: { title: 'Consolidado de bancos', crumb: 'Análisis / Todas las cuentas del mes' },
   dashboard: { title: 'Dashboard ejecutivo', crumb: 'Análisis / Resumen general' },
   conciliacion: { title: 'Conciliación de movimientos', crumb: 'Análisis / Cruce banco ↔ contabilidad' },
   alertas: { title: 'Panel de alertas', crumb: 'Análisis / Puntos de atención' },

@@ -13,6 +13,7 @@ import type { AccountSummary, ThirdPartySummary } from '../analytics/aggregation
 import { formatDate } from '../normalize/dates';
 import { formatNit } from '../normalize/nit';
 import { buildStatement } from '../analytics/statement';
+import type { ConsolidatedResult } from '../analytics/consolidated';
 
 export interface ExportContext {
   bank: BankTx[];
@@ -137,7 +138,12 @@ function autoWidths(rows: Record<string, unknown>[]): XLSX.ColInfo[] {
  * Hoja "Conciliación bancaria" en formato tradicional: saldo en libros, cada
  * grupo de partidas con su detalle y subtotal, y saldo en banco al final.
  */
-function addStatementSheet(wb: XLSX.WorkBook, ctx: ExportContext) {
+function addStatementSheet(
+  wb: XLSX.WorkBook,
+  ctx: Pick<ExportContext, 'bank' | 'ledger' | 'result' | 'kpis' | 'meta'>,
+  sheetName = 'Conciliación bancaria',
+  heading = 'CONCILIACIÓN BANCARIA',
+) {
   const st = buildStatement(ctx.bank, ctx.ledger, ctx.result, ctx.kpis);
   const MONEY = '#,##0.00;(#,##0.00);-';
   const aoa: unknown[][] = [];
@@ -150,7 +156,7 @@ function addStatementSheet(wb: XLSX.WorkBook, ctx: ExportContext) {
     if (isBold) bold.push(r);
   };
 
-  put(['CONCILIACIÓN BANCARIA'], [], true);
+  put([heading], [], true);
   put(['Extracto: ' + ctx.meta.bankFile + ' · Auxiliar: ' + ctx.meta.ledgerFile]);
   put(['Generado: ' + formatDate(ctx.meta.generatedAt)]);
   put([]);
@@ -190,7 +196,7 @@ function addStatementSheet(wb: XLSX.WorkBook, ctx: ExportContext) {
     if (cell) cell.s = { font: { bold: true } };
   }
   ws['!cols'] = [{ wch: 14 }, { wch: 11 }, { wch: 70 }, { wch: 22 }, { wch: 18 }, { wch: 20 }];
-  XLSX.utils.book_append_sheet(wb, ws, 'Conciliación bancaria');
+  XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31));
 }
 
 function addSheet(wb: XLSX.WorkBook, name: string, rows: Record<string, unknown>[]) {
@@ -408,4 +414,79 @@ export function exportRows(rows: Record<string, unknown>[], sheetName: string, f
   const wb = XLSX.utils.book_new();
   addSheet(wb, sheetName, rows);
   XLSX.writeFile(wb, fileName, { compression: true });
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Consolidado de todas las cuentas                                    */
+/* ------------------------------------------------------------------ */
+
+const STATE_LABEL: Record<string, string> = {
+  cuadra: 'Cuadra',
+  explicada: 'Diferencia explicada por partidas',
+  sin_explicar: 'Diferencia SIN explicar',
+  sin_extracto: 'Falta el extracto',
+  error: 'Error al leer el extracto',
+};
+
+export function exportConsolidated(res: ConsolidatedResult, ledgerFile: string, fileName?: string): string {
+  const wb = XLSX.utils.book_new();
+  const resumen = res.rows.map((r) => ({
+    Cuenta: r.accountCode,
+    'Nombre de la cuenta': r.accountName,
+    Banco: r.bankName,
+    Extracto: r.fileName || '—',
+    'Saldo según libros': r.saldoLibros ?? '',
+    'Saldo según banco': r.saldoBanco ?? '',
+    Diferencia: r.diferencia ?? '',
+    'Sin explicar': r.sinExplicar ?? '',
+    '% conciliado': r.porcentaje ?? '',
+    'Partidas banco': r.statementId ? r.partidasBanco : '',
+    'Partidas libros': r.statementId ? r.partidasContables : '',
+    Embargos: r.embargos.length ? r.embargos.reduce((a, e) => a + e.amount, 0) : '',
+    Estado: STATE_LABEL[r.state] + (r.saldoBancoOrigen === 'supuesto' ? ' (saldo del banco calculado)' : ''),
+  }));
+  resumen.push({
+    Cuenta: 'TOTAL',
+    'Nombre de la cuenta': '',
+    Banco: '',
+    Extracto: '',
+    'Saldo según libros': res.totals.saldoLibros,
+    'Saldo según banco': res.totals.saldoBanco,
+    Diferencia: res.totals.diferencia,
+    'Sin explicar': res.totals.sinExplicar,
+    '% conciliado': '',
+    'Partidas banco': '',
+    'Partidas libros': '',
+    Embargos: '',
+    Estado: '',
+  });
+  addSheet(wb, 'Resumen por cuenta', resumen);
+  addSheet(
+    wb,
+    'Hallazgos',
+    res.findings.map((f) => ({
+      Prioridad: f.level === 'alta' ? 'Alta' : f.level === 'media' ? 'Media' : 'Info',
+      Hallazgo: f.title,
+      Detalle: f.detail,
+      Valor: f.value ?? '',
+      Cuentas: f.accounts.join(', '),
+    })),
+  );
+  const used = new Set<string>();
+  for (const r of res.rows) {
+    if (!r.detail) continue;
+    let name = (r.accountCode + ' ' + r.bankName).slice(0, 31);
+    while (used.has(name)) name = name.slice(0, 29) + '_' + used.size;
+    used.add(name);
+    addStatementSheet(
+      wb,
+      { bank: r.detail.bank, ledger: r.detail.ledger, result: r.detail.result, kpis: r.detail.kpis, meta: { bankFile: r.fileName, ledgerFile, generatedAt: res.runAt } },
+      name,
+      'CONCILIACIÓN ' + r.accountCode + ' ' + (r.accountName || r.bankName).toUpperCase(),
+    );
+  }
+  const name = fileName ?? 'Conciliacion_consolidada_' + stamp(res.runAt) + '.xlsx';
+  XLSX.writeFile(wb, name, { compression: true });
+  return name;
 }

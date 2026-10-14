@@ -35,8 +35,10 @@ import {
 } from '../core/reconciliation/dianEngine';
 import { generateDemoSheets } from '../core/demo/sampleData';
 import { generateDianDemoSheets } from '../core/demo/dianSampleData';
+import { reconcileAll, type ConsolidatedResult, type StatementInput } from '../core/analytics/consolidated';
 
 export type Section =
+  | 'consolidado'
   | 'dashboard'
   | 'importar'
   | 'conciliacion'
@@ -120,6 +122,20 @@ interface AppState {
   setLedgerAccount: (v: 'auto' | string | null) => void;
   /** Cuenta efectivamente usada en la última construcción del auxiliar. */
   ledgerAccountUsed: string | null;
+
+  /* Consolidado: todos los extractos del mes contra el auxiliar */
+  consolidated: {
+    statements: StatementInput[];
+    result: ConsolidatedResult | null;
+    progress: string | null;
+    error: string | null;
+  };
+  addConsolidatedFiles: (files: File[]) => Promise<void>;
+  removeConsolidated: (id: string) => void;
+  setConsolidatedAccount: (id: string, choice: 'auto' | string | null) => void;
+  runConsolidated: () => Promise<void>;
+  /** Abre una cuenta del consolidado en el modo detalle (dashboard, conciliación, alertas…). */
+  openConsolidatedDetail: (statementId: string) => Promise<void>;
 
   progress: Progress | null;
   error: string | null;
@@ -357,6 +373,99 @@ export const useStore = create<AppState>((set, get) => ({
     get().log('Cuenta del auxiliar', acc ? acc.code + ' ' + acc.name : 'Todas las cuentas');
   },
 
+  consolidated: { statements: [], result: null, progress: null, error: null },
+
+  async addConsolidatedFiles(files) {
+    const c = get().consolidated;
+    set({ consolidated: { ...c, error: null, progress: 'Leyendo ' + files.length + ' extracto(s)…' } });
+    const added: StatementInput[] = [];
+    const errors: string[] = [];
+    for (const f of files) {
+      try {
+        const loaded = await loadFile(f);
+        if (loaded.pdf?.scanned) throw new Error('el PDF es una imagen escaneada (requiere OCR)');
+        added.push({ id: 'S' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6), fileName: f.name, file: loaded, accountChoice: 'auto' });
+      } catch (e) {
+        errors.push(f.name + ': ' + (e as Error).message);
+      }
+    }
+    const cur = get().consolidated;
+    set({
+      consolidated: {
+        ...cur,
+        statements: [...cur.statements, ...added],
+        result: null,
+        progress: null,
+        error: errors.length ? 'No se pudieron leer: ' + errors.join(' · ') : null,
+      },
+    });
+    get().log('Consolidado: extractos cargados', added.map((a) => a.fileName).join(', '));
+  },
+
+  removeConsolidated(id) {
+    const c = get().consolidated;
+    set({ consolidated: { ...c, statements: c.statements.filter((s) => s.id !== id), result: null } });
+  },
+
+  setConsolidatedAccount(id, choice) {
+    const c = get().consolidated;
+    set({
+      consolidated: { ...c, statements: c.statements.map((s) => (s.id === id ? { ...s, accountChoice: choice } : s)) },
+    });
+    void get().runConsolidated();
+  },
+
+  async runConsolidated() {
+    const { ledger, buildOptions, config } = get();
+    const c = get().consolidated;
+    if (!ledger.file) {
+      set({ consolidated: { ...c, error: 'Cargue primero el auxiliar contable.' } });
+      return;
+    }
+    if (!c.statements.length) {
+      set({ consolidated: { ...c, error: 'Cargue al menos un extracto.' } });
+      return;
+    }
+    set({ consolidated: { ...c, error: null, progress: 'Preparando…' } });
+    await wait(30);
+    try {
+      const result = await reconcileAll({
+        ledgerSheet: ledger.file.sheet,
+        ledgerMapping: ledger.mapping,
+        buildOptions,
+        statements: c.statements,
+        config,
+        onProgress: async (done, total, label) => {
+          set({ consolidated: { ...get().consolidated, progress: label + ' (' + (done + 1) + '/' + total + ')' } });
+          await wait(20);
+        },
+      });
+      set({ consolidated: { ...get().consolidated, result, progress: null } });
+      get().log(
+        'Conciliación consolidada',
+        result.rows.filter((r) => r.statementId).length + ' cuentas conciliadas, ' + result.findings.length + ' hallazgos',
+      );
+    } catch (e) {
+      set({ consolidated: { ...get().consolidated, progress: null, error: 'Error en el consolidado: ' + (e as Error).message } });
+    }
+  },
+
+  async openConsolidatedDetail(statementId) {
+    const c = get().consolidated;
+    const st = c.statements.find((s) => s.id === statementId);
+    const row = c.result?.rows.find((r) => r.statementId === statementId);
+    if (!st || !row) return;
+    const detection = detectMapping(st.file.sheet, 'bank');
+    set({
+      bank: { file: st.file, mapping: detection.mapping, detection, fileName: st.fileName },
+      ledgerAccount: row.accountCode || null,
+      bankOpeningBalance: null,
+      overrides: { ...EMPTY_OVERRIDES },
+    });
+    await get().run();
+    set({ section: 'dashboard' });
+  },
+
   bankOpeningBalance: null,
   setBankOpeningBalance: (v) => {
     set({ bankOpeningBalance: v });
@@ -368,6 +477,7 @@ export const useStore = create<AppState>((set, get) => ({
       bankOpeningBalance: null,
       ledgerAccount: 'auto',
       ledgerAccountUsed: null,
+      consolidated: { statements: [], result: null, progress: null, error: null },
       bank: emptySlot(),
       ledger: emptySlot(),
       bankDataset: null,
