@@ -4,6 +4,7 @@
 
 import type { BankTx, LedgerTx, ReconciliationResult } from '../types';
 import { round2 } from '../normalize/money';
+import { normalizeText } from '../normalize/text';
 import { formatDate } from '../normalize/dates';
 import type { ThirdPartySummary } from './aggregations';
 
@@ -18,7 +19,8 @@ export type AlertKind =
   | 'MOVIMIENTO_INUSUAL'
   | 'TERCERO_RECURRENTE'
   | 'ALTO_VALOR_PENDIENTE'
-  | 'REVISION_MANUAL';
+  | 'REVISION_MANUAL'
+  | 'EMBARGO';
 
 export interface Alert {
   id: string;
@@ -89,6 +91,30 @@ export function buildAlerts(
       priority: SEVERITY_WEIGHT[a.severity] + Math.min(299, Math.abs(a.value) / 100000),
     });
   };
+
+  /* 0. Embargos ---------------------------------------------------------- */
+  // Un embargo nunca es un gasto bancario ni un pago al banco: hay que saber
+  // quién lo ordenó y registrarlo contra esa entidad.
+  for (const b of bank) {
+    if (!/EMBARG/.test(normalizeText(b.description))) continue;
+    const m = result.byBank.get(b.id);
+    const l = m ? ledgerById.get(m.ledgerId) : undefined;
+    push({
+      kind: 'EMBARGO',
+      severity: 'critica',
+      title: 'Embargo debitado por el banco',
+      detail:
+        formatDate(b.date) + ' · ' + b.description + (b.reference ? ' · Ref. ' + b.reference : '') +
+        (l
+          ? ' · En libros: ' + (l.thirdPartyName || 'sin tercero') + ' ' + (l.documentNumber || '') + ' (' + formatDate(l.date) + '). ' +
+            'Verifique la entidad que ordenó el embargo y que esté registrado contra ella, no como pago al banco.'
+          : ' · No está registrado en libros.'),
+      value: b.amount,
+      date: b.date,
+      bankIds: [b.id],
+      ledgerIds: l ? [l.id] : [],
+    });
+  }
 
   /* 1. Movimientos bancarios sin registro contable --------------------- */
   for (const id of result.unmatchedBank) {
@@ -289,6 +315,7 @@ export const ALERT_KIND_LABEL: Record<AlertKind, string> = {
   TERCERO_RECURRENTE: 'Tercero recurrente',
   ALTO_VALOR_PENDIENTE: 'Alto valor pendiente',
   REVISION_MANUAL: 'Revisión manual',
+  EMBARGO: 'Embargo',
 };
 
 export const SEVERITY_LABEL: Record<AlertSeverity, string> = {

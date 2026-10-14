@@ -397,7 +397,7 @@ export function reconcile(input: ReconcileInput): ReconciliationResult {
   const byLedger = new Map<string, Match>();
   for (const m of matches) {
     byBank.set(m.bankId, m);
-    byLedger.set(m.ledgerId, m);
+    if (m.ledgerId) byLedger.set(m.ledgerId, m);
   }
 
   // Un movimiento repetido sólo es sospechoso si quedó sin contrapartida: si
@@ -470,6 +470,7 @@ const GROUP_LABEL: Record<GroupFound['kind'], string> = {
   VARIOS_BANCO: 'Varios movimientos bancarios suman exactamente un registro contable',
   VARIOS_CONTABLE: 'Varios registros contables suman exactamente un movimiento bancario',
   BLOQUE_TERCERO: 'Los movimientos pendientes del mismo tercero suman lo mismo en banco y contabilidad',
+  REVERSO_BANCO: 'Débito del banco reversado por el mismo banco (no requiere registro contable)',
 };
 
 /**
@@ -488,8 +489,28 @@ function groupMatches(
 ): Match[] {
   const bs = g.bankIds.map((id) => bankById.get(id)!);
   const ls = g.ledgerIds.map((id) => ledgerById.get(id)!);
+  if (!ls.length) {
+    // Grupo sólo bancario (reverso): las filas no tienen contrapartida contable.
+    const net = round2(bs.reduce((a, b) => a + b.amount, 0));
+    return bs.map((b, i) => ({
+      id: 'M' + (offset + i + 1),
+      bankId: b.id,
+      ledgerId: '',
+      score: 100,
+      status: 'CONCILIADO' as MatchStatus,
+      reasons: [{ code: 'GRUPO_' + g.kind, label: GROUP_LABEL[g.kind], points: 100 }],
+      amountDiff: i === 0 ? net : 0,
+      daysDiff: null,
+      origin: 'auto' as const,
+      explanation: 'Cruce agrupado ' + groupId + ': ' + GROUP_LABEL[g.kind] + '.',
+      groupId,
+    }));
+  }
   const diff = round2(bs.reduce((a, b) => a + b.amount, 0) - ls.reduce((a, l) => a + l.amount, 0));
-  const status: MatchStatus = Math.abs(diff) <= roundingOf(cfg) ? 'CONCILIADO' : 'DIF_VALOR';
+  // La diferencia del grupo se marca sólo en la primera fila: el resto de
+  // movimientos del grupo sí está conciliado (p. ej. 30 cargos de GMF contra
+  // un asiento que absorbió 5 pesos de redondeo).
+  const groupStatus: MatchStatus = Math.abs(diff) <= roundingOf(cfg) ? 'CONCILIADO' : 'DIF_VALOR';
   const label =
     GROUP_LABEL[g.kind] + ' (' + bs.length + ' bancario' + (bs.length === 1 ? '' : 's') + ' · ' +
     ls.length + ' contable' + (ls.length === 1 ? '' : 's') + ')';
@@ -503,7 +524,7 @@ function groupMatches(
       bankId: b.id,
       ledgerId: l.id,
       score: 100,
-      status,
+      status: i === 0 ? groupStatus : 'CONCILIADO',
       reasons: [{ code: 'GRUPO_' + g.kind, label, points: 100 }],
       amountDiff: i === 0 ? diff : 0,
       daysDiff: daysBetween(b.date, l.date),

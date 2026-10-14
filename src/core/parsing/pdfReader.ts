@@ -19,6 +19,7 @@ import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { RawSheet } from '../types';
 import { detectHeaderRow } from './fileReader';
 import { normalizeText } from '../normalize/text';
+import { parseStatementLines, type ParsedStatement } from './pdfStatement';
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -37,6 +38,11 @@ export interface PdfReadResult extends RawSheet {
   /** Año inferido del encabezado del extracto, si las fechas vienen sin año. */
   inferredYear: number | null;
   scanned: boolean;
+  /**
+   * Resultado del lector por filas (pdfStatement.ts) cuando fue confiable:
+   * banco, número de cuenta y cantidad de movimientos validados contra el saldo.
+   */
+  statement?: Omit<ParsedStatement, 'rows'>;
 }
 
 /** Tolerancia vertical para considerar que dos fragmentos van en la misma línea. */
@@ -326,6 +332,34 @@ export async function readPdfBuffer(
   const period = inferPeriod(fullText.slice(0, 4000));
   const year = opts.year ?? period.year;
 
+  // 1. Lector por filas (fecha + cifras + saldo corrido): sirve para casi
+  //    cualquier banco y valida cada movimiento contra el saldo impreso.
+  if (opts.headerRowIndex === undefined) {
+    const parsed = parseStatementLines(lines.map((l) => l.map((f) => f.text)));
+    if (parsed) {
+      const headers = ['Fecha', 'Descripción', 'Referencia', 'Débito', 'Crédito', 'Saldo'];
+      const rows: unknown[][] = [];
+      if (parsed.openingBalance !== null) rows.push(['', 'SALDO INICIAL', '', '', '', parsed.openingBalance]);
+      for (const r of parsed.rows) rows.push([r.date, r.description, r.reference, r.debit, r.credit, r.balance]);
+      const { rows: _omit, ...meta } = parsed;
+      return {
+        fileName,
+        sheetName: 'PDF (' + pages + (pages === 1 ? ' página)' : ' páginas)'),
+        sheetNames: ['PDF'],
+        headerRowIndex: 0,
+        headers,
+        rows,
+        totalRows: rows.length,
+        pages,
+        fullText,
+        inferredYear: year,
+        scanned: false,
+        statement: meta,
+      };
+    }
+  }
+
+  // 2. Lector genérico por columnas.
   const columns = discoverColumns(lines);
 
   let matrix: string[][];
@@ -386,4 +420,10 @@ export async function readPdfFile(file: File, opts: PdfReadOptions = {}): Promis
 
 export function isPdf(file: { name: string; type?: string }): boolean {
   return /\.pdf$/i.test(file.name) || file.type === 'application/pdf';
+}
+
+/** Líneas de texto del PDF (fragmentos por línea). Útil para diagnóstico y pruebas. */
+export async function readPdfLines(data: ArrayBuffer): Promise<string[][]> {
+  const { frags } = await extractFragments(data);
+  return groupLines(frags).map((l) => l.map((f) => f.text));
 }

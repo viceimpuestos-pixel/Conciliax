@@ -78,6 +78,17 @@ Archivo → fileReader → RawSheet ─┘                                      
    intercambiables (mismo valor, fecha y tercero) no son ambigüedad.
 6. **Overlays manuales:** las decisiones del usuario (aceptar, rechazar, vincular, ignorar) se guardan aparte y se re-aplican tras cada re-ejecución.
 
+### Extractos PDF
+`parsing/pdfStatement.ts` lee el extracto por filas (fecha + descripción + cifras + saldo), sin depender
+del diseño del banco: el valor de cada movimiento es la variación del saldo corrido y se valida contra la
+cifra impresa. Si menos del 90 % de las filas cuadra, se usa el lector genérico por columnas. Detecta banco,
+número de cuenta, saldo anterior y saldo actual (probado con Occidente, Agrario y Serfinanzas).
+
+### Auxiliar con varias cuentas
+`buildLedgerDataset` reconoce los encabezados de cuenta ("11100506  BANCO DE OCCIDENTE CG CTA# 830080420")
+y el saldo inicial de cada una. El store elige automáticamente la cuenta del extracto por número de cuenta o
+banco (`guessLedgerAccount`) y filtra el auxiliar (`filterLedgerByAccount`); el usuario puede cambiarla.
+
 ### Saldos
 El saldo del banco nunca se compara como neto contra un saldo final. Orden de preferencia: columna de saldo
 del extracto → saldo inicial (fila del archivo o digitado en el dashboard) + movimientos → saldo inicial del

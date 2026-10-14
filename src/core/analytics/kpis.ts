@@ -68,6 +68,11 @@ export interface Kpis {
    * cruce + diferencias de valor dentro de los cruces.
    */
   diferenciaExplicada: number;
+  /**
+   * Saldo inicial del banco − saldo inicial de libros, cuando ambos se conocen
+   * (diferencia que viene del período anterior). Forma parte de lo explicado.
+   */
+  diferenciaSaldoInicial: number;
   /** diferencia − diferenciaExplicada. Debe ser 0 en una conciliación cerrada. */
   diferenciaSinExplicar: number;
   partidasBanco: number;
@@ -229,6 +234,14 @@ export function computeKpis(
       partidasContables++;
     }
   }
+  // Diferencia heredada del período anterior (sólo si el saldo del banco es real).
+  const bankOpeningReal =
+    saldoBancoOrigen === 'extracto' || saldoBancoOrigen === 'inicial'
+      ? (saldos.bankOpening ?? (ordered.length ? round2((ordered[0].balance as number) - ordered[0].amount) : null))
+      : null;
+  const diferenciaSaldoInicial =
+    bankOpeningReal !== null && ledgerOpening !== null ? round2(bankOpeningReal - ledgerOpening) : 0;
+  explicada += diferenciaSaldoInicial;
   const diferencia = round2(saldoBanco - saldoContable);
 
   return {
@@ -260,6 +273,7 @@ export function computeKpis(
     egresosContables: round2(egresosContables),
     diferenciaEnCruces,
     diferenciaExplicada: round2(explicada),
+    diferenciaSaldoInicial,
     diferenciaSinExplicar: round2(diferencia - explicada),
     partidasBanco,
     partidasContables,
