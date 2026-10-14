@@ -612,6 +612,51 @@ function MapRow({
 /* Resumen del dataset                                                 */
 /* ================================================================== */
 
+/** Selector de cuenta para auxiliares que traen varias cuentas de bancos. */
+function LedgerAccountPicker<T>({ dataset }: { dataset: Dataset<T> }) {
+  const choice = useStore((st) => st.ledgerAccount);
+  const used = useStore((st) => st.ledgerAccountUsed);
+  const setLedgerAccount = useStore((st) => st.setLedgerAccount);
+  const accounts = dataset.accounts ?? [];
+  const usedAcc = accounts.find((a) => a.code === used);
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <Field
+        label={
+          <span className="row" style={{ gap: 5 }}>
+            Cuenta del auxiliar a conciliar
+            <Help text="El auxiliar trae varias cuentas de bancos. Se concilia sólo la cuenta que corresponde a este extracto; en automático se identifica por el número de cuenta o el banco del extracto." />
+          </span>
+        }
+        width="lg"
+      >
+        <select
+          value={choice === null ? '__all' : choice}
+          onChange={(e) => {
+            const v = e.target.value;
+            setLedgerAccount(v === '__all' ? null : v);
+          }}
+        >
+          <option value="auto">
+            Automático{choice === 'auto' && usedAcc ? ' → ' + usedAcc.code + ' ' + usedAcc.name : choice === 'auto' ? ' (no identificada)' : ''}
+          </option>
+          {accounts.map((a) => (
+            <option key={a.code} value={a.code}>
+              {a.code} · {a.name || 'Sin nombre'} · {formatNumber(a.movements)} mov.
+            </option>
+          ))}
+          <option value="__all">Todas las cuentas (no recomendado)</option>
+        </select>
+      </Field>
+      {usedAcc && usedAcc.openingBalance !== null && (
+        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+          Saldo inicial de la cuenta: {formatMoney(usedAcc.openingBalance)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SummaryCard<T>({
   title,
   dataset,
@@ -634,6 +679,7 @@ function SummaryCard<T>({
 
   return (
     <Card title={title} subtitle={dataset.fileName}>
+      {kind === 'ledger' && (dataset.accounts?.length ?? 0) > 1 && <LedgerAccountPicker dataset={dataset} />}
       <div className="kpi-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
         <Mini label="Registros válidos" value={formatNumber(s.valid)} />
         <Mini label="Descartados" value={formatNumber(s.discarded)} tone={s.discarded ? 'amber' : undefined} />

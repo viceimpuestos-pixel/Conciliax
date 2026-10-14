@@ -32,7 +32,8 @@ export type StatementSectionId =
   | 'bancoCreditos'
   | 'libroEgresos'
   | 'libroIngresos'
-  | 'diferenciasCruces';
+  | 'diferenciasCruces'
+  | 'saldoInicial';
 
 export interface StatementSection {
   id: StatementSectionId;
@@ -161,6 +162,26 @@ export function buildStatement(
       total: sum(diffs),
     },
   ];
+
+  if (Math.abs(kpis.diferenciaSaldoInicial) > 0.004) {
+    sections.push({
+      id: 'saldoInicial',
+      title: 'Diferencia de saldo inicial (viene del período anterior)',
+      hint: 'El saldo inicial del extracto no es igual al saldo inicial del auxiliar. Revise la conciliación del mes anterior: esa diferencia debe estar explicada allí o corregida con un asiento.',
+      sign: 1,
+      items: [
+        {
+          id: 'saldo-inicial',
+          row: 0,
+          date: null,
+          description: 'Saldo inicial extracto − saldo inicial auxiliar',
+          reference: '',
+          value: kpis.diferenciaSaldoInicial,
+        },
+      ],
+      total: kpis.diferenciaSaldoInicial,
+    });
+  }
 
   const saldoBancoConciliado = round2(
     kpis.saldoContable + sections.reduce((acc, s) => acc + s.sign * s.total, 0),

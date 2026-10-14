@@ -4,6 +4,7 @@
  */
 
 import type {
+  LedgerAccount,
   BankTx,
   ColumnMapping,
   Dataset,
@@ -339,10 +340,22 @@ export function buildLedgerDataset(
 
   const debitIsInflow = opts.ledgerSign === 'debito-ingreso';
   let openingBalance: number | null = null;
+  const openingByAccount = new Map<string, number>();
+  const accountNames = new Map<string, string>();
+  let currentHeaderAccount = '';
 
   sheet.rows.forEach((row, i) => {
-    if (openingBalance === null && isOpeningRow(row)) {
-      openingBalance = openingFromRow(row, mapping, opts.decimalHint, (d, c) => (debitIsInflow ? d - c : c - d));
+    // Encabezado de cuenta en auxiliares multi-cuenta: "11100506 | BANCO DE OCCIDENTE CG CTA# 830080420".
+    const header = accountHeader(row);
+    if (header) {
+      accountNames.set(header.code, header.name);
+      currentHeaderAccount = header.code;
+    }
+    if (isOpeningRow(row)) {
+      const ob = openingFromRow(row, mapping, opts.decimalHint, (d, c) => (debitIsInflow ? d - c : c - d));
+      if (openingBalance === null) openingBalance = ob;
+      const code = accountKey(str(row, mapping, 'accountCode')) || currentHeaderAccount;
+      if (code && ob !== null && !openingByAccount.has(code)) openingByAccount.set(code, ob);
     }
     if (opts.dropTotals && looksLikeTotal(row)) {
       discardedTotals++;
@@ -457,7 +470,112 @@ export function buildLedgerDataset(
     headers: sheet.headers,
     issues,
     stats: computeStats(rows, sheet.rows.length, dupIdx.size, openingBalance),
+    accounts: ledgerAccounts(rows, accountNames, openingByAccount),
+    account: null,
   };
+}
+
+/** "11100506.0" / "11100506" -> "11100506". */
+export function accountKey(v: unknown): string {
+  const s = String(v ?? '').trim().replace(/\.0+$/, '');
+  return /^\d{4,12}$/.test(s) ? s : '';
+}
+
+/** Fila de encabezado de cuenta: primera celda = código, segunda = nombre, sin valores. */
+function accountHeader(row: unknown[]): { code: string; name: string } | null {
+  const cells = row.map((c) => (c === null || c === undefined ? '' : String(c).trim()));
+  const nonEmpty = cells.filter(Boolean);
+  if (nonEmpty.length === 1) {
+    // Una sola celda: "11100506  BANCO DE OCCIDENTE CG CTA# 830080420".
+    const m = nonEmpty[0].match(/^(\d{6,12})\s+(.*[A-Za-z].*)$/);
+    return m ? { code: m[1], name: m[2].trim() } : null;
+  }
+  if (nonEmpty.length !== 2) return null;
+  const code = accountKey(nonEmpty[0]);
+  if (!code || code.length < 6) return null;
+  if (!/[A-Za-z]/.test(nonEmpty[1])) return null;
+  return { code, name: nonEmpty[1] };
+}
+
+function ledgerAccounts(
+  rows: LedgerTx[],
+  names: Map<string, string>,
+  openings: Map<string, number>,
+): LedgerAccount[] {
+  const counts = new Map<string, number>();
+  for (const r of rows) {
+    const k = accountKey(r.accountCode);
+    if (k) counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([code, movements]) => ({
+      code,
+      name: names.get(code) ?? '',
+      movements,
+      openingBalance: openings.get(code) ?? null,
+    }));
+}
+
+/**
+ * Restringe un auxiliar multi-cuenta a una sola cuenta: filas, estadísticas y
+ * saldo inicial de esa cuenta. Con `code` null devuelve el auxiliar completo.
+ */
+export function filterLedgerByAccount(ds: Dataset<LedgerTx>, code: string | null): Dataset<LedgerTx> {
+  if (!code) return { ...ds, account: null };
+  const acc = ds.accounts?.find((a) => a.code === code);
+  const rows = ds.rows.filter((r) => accountKey(r.accountCode) === code);
+  const dupIdx = markDuplicates(
+    rows.map((r) =>
+      [r.date?.getTime() ?? 'nd', r.amount, r.thirdPartyId, r.documentNumber || normalizeText(r.description).slice(0, 40)].join('|'),
+    ),
+  );
+  return {
+    ...ds,
+    rows,
+    account: code,
+    stats: computeStats(rows, rows.length, dupIdx.size, acc?.openingBalance ?? null),
+  };
+}
+
+/**
+ * Elige la cuenta del auxiliar que corresponde a un extracto: por número de
+ * cuenta (dígitos del encabezado del auxiliar) y, si no, por nombre del banco.
+ */
+export function guessLedgerAccount(
+  accounts: LedgerAccount[],
+  hint: { accountNumber?: string; bankName?: string; text?: string },
+): string | null {
+  if (accounts.length <= 1) return accounts[0]?.code ?? null;
+  const strip = (s: string) => s.replace(/\D/g, '').replace(/^0+/, '');
+  const num = strip(hint.accountNumber ?? '');
+  if (num.length >= 7) {
+    const hit = accounts.find((a) => {
+      const d = strip(a.name);
+      return d.length >= 7 && (d.includes(num) || num.includes(d));
+    });
+    if (hit) return hit.code;
+  }
+  const hay = normalizeText((hint.bankName ?? '') + ' ' + (hint.text ?? ''));
+  const keywords: [RegExp, RegExp][] = [
+    [/OCCIDENTE/, /OCCIDENTE/],
+    [/AGRARIO/, /AGRARIO/],
+    [/SERFINANZA/, /SERFINANZA/],
+    [/DAVIVIENDA/, /DAVIVIENDA/],
+    [/BBVA/, /BBVA/],
+    [/BANCO DE BOGOTA/, /BOGOTA/],
+    [/POPULAR/, /POPULAR/],
+    [/AV VILLAS/, /VILLAS/],
+    [/ITAU/, /ITAU/],
+    [/COLPATRIA|SCOTIABANK/, /COLPATRIA|SCOTIA/],
+    [/CAJA SOCIAL/, /CAJA SOCIAL/],
+  ];
+  for (const [inText, inName] of keywords) {
+    if (!inText.test(hay)) continue;
+    const hits = accounts.filter((a) => inName.test(normalizeText(a.name)));
+    if (hits.length === 1) return hits[0].code;
+  }
+  return null;
 }
 
 /** Guarda la fila original indexada por encabezado (para el detalle en pantalla). */

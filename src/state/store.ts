@@ -21,9 +21,9 @@ import type {
   ReconciliationResult,
 } from '../core/types';
 import { EMPTY_DIAN_OVERRIDES, EMPTY_OVERRIDES } from '../core/types';
-import { loadFile, loadBuffer, type LoadedFile } from '../core/parsing/loadFile';
+import { loadFile, loadBuffer, bankAccountHint, type LoadedFile } from '../core/parsing/loadFile';
 import { detectMapping, type DetectionInfo } from '../core/parsing/columnMap';
-import { buildBankDataset, buildDianDataset, buildLedgerDataset, type BuildOptions } from '../core/parsing/buildDataset';
+import { buildBankDataset, buildDianDataset, buildLedgerDataset, filterLedgerByAccount, guessLedgerAccount, type BuildOptions } from '../core/parsing/buildDataset';
 import { reconcile, pairKey } from '../core/reconciliation/engine';
 import { DEFAULT_CONFIG, cloneConfig, type ReconciliationConfig } from '../core/reconciliation/config';
 import {
@@ -111,6 +111,15 @@ interface AppState {
    */
   bankOpeningBalance: number | null;
   setBankOpeningBalance: (v: number | null) => void;
+  /**
+   * Cuenta del auxiliar a conciliar cuando el archivo trae varias (p. ej. 1110
+   * con todos los bancos). 'auto' = se elige por el número de cuenta / banco del
+   * extracto; un código = elegida por el usuario; null = todas.
+   */
+  ledgerAccount: 'auto' | string | null;
+  setLedgerAccount: (v: 'auto' | string | null) => void;
+  /** Cuenta efectivamente usada en la última construcción del auxiliar. */
+  ledgerAccountUsed: string | null;
 
   progress: Progress | null;
   error: string | null;
@@ -231,6 +240,9 @@ export const useStore = create<AppState>((set, get) => ({
       const detection = detectMapping(loaded.sheet, 'bank');
       set({
         bank: { file: loaded, mapping: detection.mapping, detection, fileName: file.name },
+        // Extracto nuevo: se vuelve a detectar la cuenta del auxiliar y su saldo inicial.
+        ledgerAccount: 'auto',
+        bankOpeningBalance: null,
         warnings: [...get().warnings.filter((w) => !w.startsWith('Extracto:')), ...loaded.warnings.map((w) => 'Extracto: ' + w)],
       });
       get().log('Carga de extracto', file.name + ' (' + loaded.sheet.totalRows + ' filas)');
@@ -281,8 +293,28 @@ export const useStore = create<AppState>((set, get) => ({
     const { bank, ledger, buildOptions } = get();
     if (!bank.file || !ledger.file) return;
     const bankDataset = buildBankDataset(bank.file.sheet, bank.mapping, buildOptions);
-    const ledgerDataset = buildLedgerDataset(ledger.file.sheet, ledger.mapping, buildOptions);
-    set({ bankDataset, ledgerDataset });
+    const fullLedger = buildLedgerDataset(ledger.file.sheet, ledger.mapping, buildOptions);
+    const accounts = fullLedger.accounts ?? [];
+    const choice = get().ledgerAccount;
+    let code: string | null = null;
+    if (accounts.length > 1) {
+      code = choice === 'auto' ? guessLedgerAccount(accounts, bankAccountHint(bank.file)) : choice;
+      if (code && !accounts.some((a) => a.code === code)) code = null;
+    }
+    const ledgerDataset = filterLedgerByAccount(fullLedger, code);
+    if (accounts.length > 1 && !code) {
+      ledgerDataset.issues = [
+        {
+          level: 'error',
+          code: 'AUX_MULTICUENTA',
+          message:
+            'El auxiliar trae ' + accounts.length + ' cuentas de bancos y no se pudo identificar cuál corresponde a este extracto. ' +
+            'Elija la cuenta en "Cuenta del auxiliar a conciliar": conciliar un extracto contra todas las cuentas mezcla bancos.',
+        },
+        ...ledgerDataset.issues,
+      ];
+    }
+    set({ bankDataset, ledgerDataset, ledgerAccountUsed: code });
   },
 
   async loadDemo() {
@@ -316,6 +348,15 @@ export const useStore = create<AppState>((set, get) => ({
     set({ section: 'dashboard', wizardStep: 8 });
   },
 
+  ledgerAccount: 'auto',
+  ledgerAccountUsed: null,
+  setLedgerAccount: (v) => {
+    set({ ledgerAccount: v, bankOpeningBalance: null });
+    get().buildDatasets();
+    const acc = get().ledgerDataset?.accounts?.find((a) => a.code === get().ledgerAccountUsed);
+    get().log('Cuenta del auxiliar', acc ? acc.code + ' ' + acc.name : 'Todas las cuentas');
+  },
+
   bankOpeningBalance: null,
   setBankOpeningBalance: (v) => {
     set({ bankOpeningBalance: v });
@@ -325,6 +366,8 @@ export const useStore = create<AppState>((set, get) => ({
   clearAll() {
     set({
       bankOpeningBalance: null,
+      ledgerAccount: 'auto',
+      ledgerAccountUsed: null,
       bank: emptySlot(),
       ledger: emptySlot(),
       bankDataset: null,

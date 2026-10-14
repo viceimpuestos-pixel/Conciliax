@@ -159,7 +159,7 @@ function addStatementSheet(wb: XLSX.WorkBook, ctx: ExportContext) {
 
   for (const sec of st.sections) {
     if (!sec.items.length) continue;
-    put([(sec.id === 'diferenciasCruces' ? '(±) ' : sec.sign > 0 ? '(+) ' : '(−) ') + sec.title.toUpperCase() + ' (' + sec.items.length + ')', '', '', '', '', sec.sign * sec.total], [5], true);
+    put([((sec.id === 'diferenciasCruces' || sec.id === 'saldoInicial') ? '(±) ' : sec.sign > 0 ? '(+) ' : '(−) ') + sec.title.toUpperCase() + ' (' + sec.items.length + ')', '', '', '', '', sec.sign * sec.total], [5], true);
     put([sec.hint]);
     put(['Fecha', 'Fila archivo', 'Descripción', 'Documento / Ref.', 'Valor']);
     for (const it of sec.items) {

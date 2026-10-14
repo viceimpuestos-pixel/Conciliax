@@ -56,6 +56,11 @@ export function DashboardPage() {
   const lastRunAt = useStore((s) => s.lastRunAt);
   const bankFile = useStore((s) => s.bank.fileName);
   const ledgerFile = useStore((s) => s.ledger.fileName);
+  const ledgerAccount = useStore((s) => {
+    const code = s.ledgerAccountUsed;
+    const acc = code ? s.ledgerDataset?.accounts?.find((a) => a.code === code) : undefined;
+    return acc ? acc.code + ' ' + acc.name : '';
+  });
 
   const cuadra = Math.abs(kpis.diferencia) < 1;
   const explicada = Math.abs(kpis.diferenciaSinExplicar) < 1;
@@ -70,6 +75,7 @@ export function DashboardPage() {
           <h2>Resumen ejecutivo</h2>
           <div className="sub">
             {bankFile} · {ledgerFile}
+            {ledgerAccount && ' · Cuenta ' + ledgerAccount}
             {lastRunAt && ' · Última conciliación: ' + formatDate(lastRunAt) + ' ' + lastRunAt.toLocaleTimeString('es-CO')}
           </div>
         </div>

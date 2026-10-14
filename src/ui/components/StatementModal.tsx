@@ -68,7 +68,7 @@ export function StatementModal({ open, onClose }: { open: boolean; onClose: () =
             .map((s) => (
               <Line
                 key={s.id}
-                label={(s.id === 'diferenciasCruces' ? '(±) ' : s.sign > 0 ? '(+) ' : '(−) ') + s.title + ' · ' + formatNumber(s.items.length)}
+                label={((s.id === 'diferenciasCruces' || s.id === 'saldoInicial') ? '(±) ' : s.sign > 0 ? '(+) ' : '(−) ') + s.title + ' · ' + formatNumber(s.items.length)}
                 value={s.sign * s.total}
               />
             ))}

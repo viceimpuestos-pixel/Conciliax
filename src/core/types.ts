@@ -239,6 +239,10 @@ export interface Dataset<T> {
   headers: string[];
   issues: ValidationIssue[];
   stats: DatasetStats;
+  /** Sólo auxiliar: cuentas que trae el archivo (vacío o una sola = auxiliar de una cuenta). */
+  accounts?: LedgerAccount[];
+  /** Sólo auxiliar: cuenta a la que se filtró el dataset (null = todas). */
+  account?: string | null;
 }
 
 export interface DatasetStats {
@@ -257,6 +261,15 @@ export interface DatasetStats {
    * "SALDO ANTERIOR"). Para el extracto también se deduce de la primera fila
    * con saldo. null = el archivo no lo informa.
    */
+  openingBalance: number | null;
+}
+
+/** Cuenta contable presente en el auxiliar (un auxiliar puede traer varios bancos). */
+export interface LedgerAccount {
+  code: string;
+  /** Nombre de la cuenta tomado del encabezado del auxiliar ("BANCO DE OCCIDENTE CG CTA# 830080420"). */
+  name: string;
+  movements: number;
   openingBalance: number | null;
 }
 

@@ -20,7 +20,7 @@ import { normalizeText } from '../normalize/text';
 export interface GroupFound {
   bankIds: string[];
   ledgerIds: string[];
-  kind: 'GASTOS_BANCARIOS' | 'VARIOS_BANCO' | 'VARIOS_CONTABLE' | 'BLOQUE_TERCERO';
+  kind: 'GASTOS_BANCARIOS' | 'VARIOS_BANCO' | 'VARIOS_CONTABLE' | 'BLOQUE_TERCERO' | 'REVERSO_BANCO';
 }
 
 export interface GroupingInput {
@@ -94,7 +94,9 @@ export function affinity(b: BankTx, l: LedgerTx): boolean {
 
 const LEDGER_FEE = /\b(GASTOS? BANCARIOS?|COMISION(ES)? BANCARIA|GMF|GRAVAMEN|4 ?X ?1000|CUATRO POR MIL)\b/;
 const BANK_FEE =
-  /\b(4X1000|4 X 1000|GMF|GRAVAMEN|IMPTO GOBIERNO|IVA|COMIS|COMISION|CUOTA (DE )?MANEJO|SERVICIO PAGO|CARGO|COBRO)\b/;
+  /\b(4X1000|4 X 1000|GMF|G M F|GRAVAMEN|IMPTO GOBIERNO|IVA|COMIS|COMISION|CUOTA (DE )?(MANEJO|ADMINISTRACION)|SERVICIO PAGO|CARGO|COBRO|REINTEGRO G ?M ?F)\b/;
+/** Débito del banco que luego se reversa (PSE rechazado, transferencia devuelta). */
+const BANK_REVERSAL = /\b(REINTEGRO|REVERSO|REVERSION|DEVOLUCION|ANULACION|REEMBOLSO) (DE )?(TRANSACCIONES|TRANSACCION|PAGO|PSE|TRANSFERENCIA|DEBITO|COMPRA)/;
 
 function isLedgerFee(l: LedgerTx): boolean {
   return LEDGER_FEE.test(normalizeText(l.description + ' ' + l.thirdPartyName + ' ' + l.accountName));
@@ -188,12 +190,41 @@ export function findGroups(input: GroupingInput): GroupFound[] {
     const k = monthOf(l.date) + (l.amount < 0 ? '-' : '+');
     feeLedgerByMonth.set(k, [...(feeLedgerByMonth.get(k) ?? []), l]);
   }
-  for (const [k, ls] of feeLedgerByMonth) {
-    const fees = freeBank().filter(
-      (b) => isBankFee(b) && monthOf(b.date) + (b.amount < 0 ? '-' : '+') === k && ls.every((l) => allowed(b, l)),
-    );
+  /* --- 0. Reversos del banco (PSE rechazado y reintegrado) ----------- */
+  // Un débito y su reintegro por el mismo valor se anulan entre sí; ninguno
+  // debe estar en libros. Se cruzan antes que los gastos para que el GMF del
+  // reintegro quede con los demás cargos del mes.
+  for (const cr of freeBank().filter((b) => b.amount > 0 && BANK_REVERSAL.test(normalizeText(b.description)))) {
+    const db = freeBank()
+      .filter(
+        (b) =>
+          b.amount < 0 &&
+          Math.abs(b.amount + cr.amount) < 0.005 &&
+          (daysBetween(b.date, cr.date) ?? 0) <= 0 &&
+          Math.abs(daysBetween(b.date, cr.date) ?? 0) <= 15,
+      )
+      .sort((a, b) => Math.abs(daysBetween(a.date, cr.date) ?? 0) - Math.abs(daysBetween(b.date, cr.date) ?? 0))[0];
+    if (db) take({ bankIds: [db.id, cr.id], ledgerIds: [], kind: 'REVERSO_BANCO' });
+  }
+
+  /* --- 1. Gastos bancarios del mes ---------------------------------- */
+  // Todos los cargos del banco del mes (GMF, IVA, comisiones, cuota de manejo,
+  // y sus reintegros con signo positivo) contra el o los asientos de gastos
+  // bancarios del mismo mes. Si la suma difiere en poco (el asiento suele
+  // absorber centavos de redondeo), se cruza igual y queda como diferencia de
+  // valor visible.
+  const ledgerFeesByMonth = new Map<string, LedgerTx[]>();
+  for (const l of freeLedger()) {
+    if (!isLedgerFee(l)) continue;
+    const k = monthOf(l.date);
+    ledgerFeesByMonth.set(k, [...(ledgerFeesByMonth.get(k) ?? []), l]);
+  }
+  for (const [k, ls] of ledgerFeesByMonth) {
+    const fees = freeBank().filter((b) => isBankFee(b) && monthOf(b.date) === k && ls.every((l) => allowed(b, l)));
     if (!fees.length) continue;
-    if (Math.abs(sumC(fees) - sumC(ls)) <= tolC) {
+    const diff = Math.abs(sumC(fees) - sumC(ls));
+    const total = Math.abs(sumC(ls));
+    if (diff <= Math.max(tolC, Math.min(100_000, total * 0.001))) {
       take({ bankIds: fees.map((b) => b.id), ledgerIds: ls.map((l) => l.id), kind: 'GASTOS_BANCARIOS' });
     }
   }
