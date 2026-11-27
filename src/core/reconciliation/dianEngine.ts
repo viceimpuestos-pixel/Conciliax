@@ -32,6 +32,8 @@ import { duplicateIds } from './engine';
 import { daysBetween } from '../normalize/dates';
 import { calcDV, nitEquals } from '../normalize/nit';
 import { nameSimilarity, normalizeRef, refMatches } from '../normalize/text';
+import { explainTaxes, voucherTaxes } from './dianTaxes';
+import type { DianWithholding } from '../types';
 
 /* ------------------------------------------------------------------ */
 /* Configuración                                                       */
@@ -107,7 +109,13 @@ export function cloneDianConfig(c: DianConfig): DianConfig {
 export interface DianPairScore {
   score: number;
   reasons: DianMatchReason[];
+  /** Diferencia neta (después de retenciones). */
   amountDiff: number;
+  grossDiff: number;
+  withholdings: DianWithholding[];
+  ledgerIva: number | null;
+  /** El IVA contabilizado en el comprobante no coincide con el de la factura. */
+  ivaMismatch: boolean;
   daysDiff: number | null;
   explanation: string;
   viable: boolean;
@@ -117,10 +125,19 @@ const REJECTED: DianPairScore = {
   score: 0,
   reasons: [],
   amountDiff: 0,
+  grossDiff: 0,
+  withholdings: [],
+  ledgerIva: null,
+  ivaMismatch: false,
   daysDiff: null,
   explanation: 'Descartado',
   viable: false,
 };
+
+/** Contexto opcional del par: las demás líneas del mismo comprobante contable. */
+export interface DianPairContext {
+  voucher?: LedgerTx[];
+}
 
 function buildExplanation(reasons: DianMatchReason[]): string {
   const positives = reasons.filter((r) => r.points > 0).sort((a, b) => b.points - a.points);
@@ -130,7 +147,7 @@ function buildExplanation(reasons: DianMatchReason[]): string {
   return 'Coincidencia encontrada por ' + parts.join(' + ') + extra + '.';
 }
 
-export function scoreDianPair(doc: DianTx, ledger: LedgerTx, cfg: DianConfig): DianPairScore {
+export function scoreDianPair(doc: DianTx, ledger: LedgerTx, cfg: DianConfig, ctx: DianPairContext = {}): DianPairScore {
   const { weights: w, tolerances: t } = cfg;
 
   const bothNit = Boolean(doc.nit) && Boolean(ledger.thirdPartyId);
@@ -143,14 +160,13 @@ export function scoreDianPair(doc: DianTx, ledger: LedgerTx, cfg: DianConfig): D
   // marcaría como "diferencia de valor" un cruce exacto cuyo lado contable
   // resultó negativo.
   const ledgerAbs = Math.abs(ledger.amount);
-  const amountDiff = Math.round((doc.amount - ledgerAbs) * 100) / 100;
-  const absDiff = Math.abs(amountDiff);
+  const grossDiff = Math.round((doc.amount - ledgerAbs) * 100) / 100;
   const tolerance = Math.max(t.amountAbsolute, (doc.amount * t.amountPercent) / 100);
   // Ventana ampliada: un documento puede diferir bastante en valor y seguir
   // siendo el mismo si el número de documento coincide exacto (ej. retención
   // en la fuente aplicada, nota crédito parcial).
   const diffWindow = Math.max(tolerance * 6, doc.amount);
-  if (absDiff > diffWindow) return REJECTED;
+  if (Math.abs(grossDiff) > diffWindow) return REJECTED;
 
   const daysDiff = daysBetween(doc.issueDate, ledger.date);
   if (daysDiff !== null && Math.abs(daysDiff) > t.maxDateDays) return REJECTED;
@@ -181,6 +197,9 @@ export function scoreDianPair(doc: DianTx, ledger: LedgerTx, cfg: DianConfig): D
     add('DOCUMENTO_PARCIAL', 'Número de factura contenido en el registro contable', w.document * 0.85);
   } else if (numberOnly && ledgerDoc && ledgerDoc.length >= 3 && ledgerDoc.includes(numberOnly)) {
     add('DOCUMENTO_PARCIAL', 'Número de documento contenido en el registro contable', w.document * 0.85);
+  } else if (docKey.length >= 4 && /\d/.test(docKey) && normalizeRef(ledger.description).includes(docKey)) {
+    // "CUENTA POR PAGAR, FACTURA: 10FT-142334721" trae el folio completo (prefijo + número).
+    add('DOCUMENTO_DESC', 'Número de factura completo en la descripción contable (' + (doc.prefix ? doc.prefix + ' ' : '') + doc.number + ')', w.document);
   } else if (numberOnly.length >= 3 && refMatches(numberOnly, ledger.description)) {
     add('DOCUMENTO_DESC', 'Número de documento hallado en la descripción contable', w.document * 0.6);
   } else {
@@ -194,8 +213,24 @@ export function scoreDianPair(doc: DianTx, ledger: LedgerTx, cfg: DianConfig): D
   }
 
   // 3. Valor --------------------------------------------------------------
+  // El total DIAN incluye IVA; la cuenta por pagar/cobrar queda neta de
+  // retenciones. Si el documento coincide, la diferencia se explica con las
+  // retenciones del comprobante o, en su defecto, por tarifa.
+  const docMatched = reasons.some((r) => r.points > 0 && r.code.startsWith('DOCUMENTO'));
+  const tax =
+    docMatched && grossDiff > 0.01
+      ? explainTaxes(doc, ledger, ctx.voucher, grossDiff)
+      : { withholdings: [] as DianWithholding[], netDiff: grossDiff, ledgerIva: ctx.voucher ? voucherTaxes(ctx.voucher).iva : null };
+  const amountDiff = tax.netDiff;
+  const absDiff = Math.abs(amountDiff);
+  const whLabel = tax.withholdings
+    .map((x) => x.label + ' ' + x.amount.toLocaleString('es-CO') + (x.inferred ? ' (deducida)' : ''))
+    .join(' + ');
+
   max += w.amount;
-  if (absDiff <= 0.01) {
+  if (tax.withholdings.length && absDiff <= 0.01) {
+    add('VALOR_NETO_RETENCIONES', 'Total factura − retenciones = valor contabilizado (' + whLabel + ')', w.amount);
+  } else if (absDiff <= 0.01) {
     add('VALOR_EXACTO', 'Valor exacto', w.amount);
   } else if (absDiff <= tolerance) {
     const closeness = tolerance > 0 ? 1 - absDiff / tolerance : 0;
@@ -203,9 +238,24 @@ export function scoreDianPair(doc: DianTx, ledger: LedgerTx, cfg: DianConfig): D
   } else {
     reasons.push({
       code: 'VALOR_DIFERENTE',
-      label: 'Diferencia de valor de ' + absDiff.toLocaleString('es-CO'),
+      label:
+        'Diferencia de valor de ' + absDiff.toLocaleString('es-CO') + (tax.withholdings.length ? ' después de ' + whLabel : ''),
       points: 0,
     });
+  }
+
+  // IVA: el del comprobante contable (2408) contra el de la factura electrónica.
+  const ivaMismatch = tax.ledgerIva !== null && doc.tax > 0 && Math.abs(tax.ledgerIva - doc.tax) > 1;
+  if (ivaMismatch) {
+    reasons.push({
+      code: 'IVA_DIFERENTE',
+      label:
+        'IVA contabilizado ' + (tax.ledgerIva ?? 0).toLocaleString('es-CO') + ' vs. IVA de la factura ' +
+        doc.tax.toLocaleString('es-CO'),
+      points: 0,
+    });
+  } else if (tax.ledgerIva !== null && doc.tax > 0) {
+    reasons.push({ code: 'IVA_OK', label: 'IVA contabilizado igual al de la factura (' + doc.tax.toLocaleString('es-CO') + ')', points: 0 });
   }
 
   // 4. Fecha --------------------------------------------------------------
@@ -234,6 +284,10 @@ export function scoreDianPair(doc: DianTx, ledger: LedgerTx, cfg: DianConfig): D
     score: Math.round(score * 10) / 10,
     reasons,
     amountDiff,
+    grossDiff,
+    withholdings: tax.withholdings,
+    ledgerIva: tax.ledgerIva,
+    ivaMismatch,
     daysDiff,
     explanation: buildExplanation(reasons),
     viable: true,
@@ -250,9 +304,10 @@ function classify(
   daysDiff: number | null,
   cfg: DianConfig,
   ambiguous: boolean,
+  ivaMismatch = false,
 ): DianMatchStatus {
   const th = cfg.thresholds;
-  const significantDiff = Math.abs(amountDiff) > 0.01;
+  const significantDiff = Math.abs(amountDiff) > 0.01 || ivaMismatch;
   const farDate = daysDiff !== null && Math.abs(daysDiff) > cfg.tolerances.dateWindowDays;
 
   if (score < th.revision) return 'NO_CONCILIADO';
@@ -305,6 +360,18 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
     return l.thirdPartyId + '|' + doc;
   };
 
+  // Líneas de cada comprobante contable (mismo número de documento): de ahí
+  // salen las retenciones y el IVA de la factura.
+  const vouchers = new Map<string, LedgerTx[]>();
+  for (const l of ledger) {
+    const k = normalizeRef(l.documentNumber);
+    if (!k) continue;
+    const arr = vouchers.get(k);
+    if (arr) arr.push(l);
+    else vouchers.set(k, [l]);
+  }
+  const ctxOf = (l: LedgerTx): DianPairContext => ({ voucher: vouchers.get(normalizeRef(l.documentNumber)) });
+
   const takenDian = new Set<string>();
   const takenLedger = new Set<string>();
   const matches: DianMatch[] = [];
@@ -329,7 +396,7 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
     if (takenDian.has(d.id) || takenLedger.has(l.id)) continue;
     if (ignoredDian.has(d.id) || ignoredLedger.has(l.id)) continue;
 
-    const s = scoreDianPair(d, l, cfg);
+    const s = scoreDianPair(d, l, cfg, ctxOf(l));
     pushMatch({
       id: 'MD' + (matches.length + 1),
       dianId: d.id,
@@ -337,7 +404,10 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
       score: 100,
       status: 'CONCILIADO',
       reasons: [{ code: 'MANUAL', label: 'Vinculado manualmente por el usuario', points: 100 }, ...s.reasons],
-      amountDiff: Math.round((d.amount - l.amount) * 100) / 100,
+      amountDiff: s.amountDiff,
+      grossDiff: s.grossDiff,
+      withholdings: s.withholdings,
+      ledgerIva: s.ledgerIva,
       daysDiff: s.daysDiff,
       origin: 'manual',
       explanation: 'Vinculación manual del usuario.',
@@ -353,7 +423,7 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
     if (takenDian.has(dianId) || takenLedger.has(ledgerId)) continue;
     if (ignoredDian.has(dianId) || ignoredLedger.has(ledgerId)) continue;
 
-    const s = scoreDianPair(d, l, cfg);
+    const s = scoreDianPair(d, l, cfg, ctxOf(l));
     pushMatch({
       id: 'MD' + (matches.length + 1),
       dianId,
@@ -361,7 +431,10 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
       score: 100,
       status: 'CONCILIADO',
       reasons: [{ code: 'ACEPTADO', label: 'Coincidencia aceptada por el usuario', points: 100 }, ...s.reasons],
-      amountDiff: Math.round((d.amount - l.amount) * 100) / 100,
+      amountDiff: s.amountDiff,
+      grossDiff: s.grossDiff,
+      withholdings: s.withholdings,
+      ledgerIva: s.ledgerIva,
       daysDiff: s.daysDiff,
       origin: 'manual',
       explanation: 'Aceptada manualmente. ' + s.explanation,
@@ -427,7 +500,7 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
       if (ignoredLedger.has(l.id) || takenLedger.has(l.id)) continue;
       if (rejected.has(pairKey(d.id, l.id))) continue;
 
-      const s = scoreDianPair(d, l, cfg);
+      const s = scoreDianPair(d, l, cfg, ctxOf(l));
       if (!s.viable || s.score <= 0) continue;
       scored.push({ dianIdx, ledgerIdx, s });
     }
@@ -473,7 +546,7 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
     );
     const ambiguous = cfg.flagAmbiguous && competingGroups.size > 0;
 
-    const status = classify(p.s.score, p.s.amountDiff, p.s.daysDiff, cfg, ambiguous);
+    const status = classify(p.s.score, p.s.amountDiff, p.s.daysDiff, cfg, ambiguous, p.s.ivaMismatch);
 
     pushMatch({
       id: 'MD' + (matches.length + 1),
@@ -485,6 +558,9 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
         ? [...p.s.reasons, { code: 'AMBIGUO', label: 'Existe más de un candidato con el mismo puntaje', points: 0 }]
         : p.s.reasons,
       amountDiff: p.s.amountDiff,
+      grossDiff: p.s.grossDiff,
+      withholdings: p.s.withholdings,
+      ledgerIva: p.s.ledgerIva,
       daysDiff: p.s.daysDiff,
       origin: 'auto',
       explanation: ambiguous
@@ -522,6 +598,14 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
     const key = ledgerGroupKey(l);
     if (key) groupCoverage.set(key, m);
   }
+  // Las demás líneas del comprobante de una factura cruzada (IVA descontable,
+  // retenciones, gasto) también quedan soportadas por ese documento DIAN.
+  const voucherCoverage = new Map<string, DianMatch>();
+  for (const l of ledger) {
+    const m = byLedger.get(l.id);
+    const k = normalizeRef(l.documentNumber);
+    if (m && k) voucherCoverage.set(k, m);
+  }
 
   const dianStatus = new Map<string, DianMatchStatus>();
   const ledgerStatus = new Map<string, DianMatchStatus>();
@@ -556,7 +640,7 @@ export function reconcileDian(input: DianReconcileInput): DianReconciliationResu
       ledgerStatus.set(l.id, m.status);
       continue;
     }
-    const sibling = groupCoverage.get(ledgerGroupKey(l));
+    const sibling = groupCoverage.get(ledgerGroupKey(l)) ?? voucherCoverage.get(normalizeRef(l.documentNumber));
     if (sibling) {
       ledgerStatus.set(l.id, sibling.status);
       continue;

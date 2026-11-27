@@ -235,3 +235,105 @@ describe('casos reales de auxiliares de compras', () => {
     expect(result.dianStatus.get(dian.rows[0].id)).toBe('CONCILIADO');
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* Retenciones e IVA (casos reales Asercol, noviembre 2026)            */
+/* ------------------------------------------------------------------ */
+
+describe('retenciones: total DIAN vs. cuenta por pagar', () => {
+  // FESI 880 · ABINTEC SAS: base 1.436.256 + IVA 272.889 = 1.709.145; retefuente 4 % 57.450; CxP 1.651.695.
+  const DIAN_FESI = ['806011845', 'ABINTEC SAS ABOGADOS E INVESTIGACIONES', 'FESI', '880', '03/11/2026', '1709145', 'Validado'];
+
+  function dianWithTax(rows: unknown[][], taxes: number[]) {
+    const raw = sheet([...DIAN_HEADERS, 'IVA'], rows.map((r, i) => [...r, taxes[i]]), 'dian.xlsx');
+    const det = detectMapping(raw, 'dian');
+    return buildDianDataset(raw, det.mapping);
+  }
+
+  it('concilia cuando el comprobante trae la retención en la fuente (2365)', () => {
+    const dian = dianWithTax([DIAN_FESI], [272889]);
+    const { ds: ledger } = buildLedgerCompras([
+      ['07/11/2026', '51059502', '806011845', 'ABINTEC SAS', 'FC-351524-0', 'FESI 880', 'VISITAS DOMICILIARIAS', '1436256', '0'],
+      ['07/11/2026', '24080301', '806011845', 'ABINTEC SAS', 'FC-351524-0', '', 'IVA DESCONTABLE POR SERVICIOS', '272889', '0'],
+      ['07/11/2026', '23652502', '806011845', 'ABINTEC SAS', 'FC-351524-0', '', 'RETENCION SERVICIOS 4%', '0', '57450'],
+      ['07/11/2026', '22050505', '806011845', 'ABINTEC SAS', 'FC-351524-0', 'FESI 880', 'CUENTA POR PAGAR, FACTURA: FESI 880', '0', '1651695'],
+    ]);
+    const r = reconcileDian({ dian: dian.rows, ledger: ledger.rows, config: DEFAULT_DIAN_CONFIG });
+    const m = r.byDian.get(dian.rows[0].id)!;
+    expect(r.dianStatus.get(dian.rows[0].id)).toBe('CONCILIADO');
+    expect(ledger.rows.find((l) => l.id === m.ledgerId)!.accountCode).toBe('22050505');
+    expect(m.grossDiff).toBe(57450);
+    expect(m.amountDiff).toBe(0);
+    expect(m.withholdings).toEqual([expect.objectContaining({ kind: 'RETEFUENTE', amount: 57450, account: '23652502', inferred: false })]);
+    expect(m.ledgerIva).toBe(272889);
+  });
+
+  it('deduce la retención por tarifa cuando el auxiliar sólo trae la cuenta por pagar', () => {
+    const dian = dianWithTax([DIAN_FESI], [272889]);
+    const { ds: ledger } = buildLedgerCompras([
+      ['07/11/2026', '22050505', '806011845', 'ABINTEC SAS', 'FC-351524-0', 'FESI 880', 'CUENTA POR PAGAR, FACTURA: FESI 880', '0', '1651695'],
+    ]);
+    const r = reconcileDian({ dian: dian.rows, ledger: ledger.rows, config: DEFAULT_DIAN_CONFIG });
+    const m = r.byDian.get(dian.rows[0].id)!;
+    expect(r.dianStatus.get(dian.rows[0].id)).toBe('CONCILIADO');
+    expect(m.withholdings).toHaveLength(1);
+    expect(m.withholdings![0]).toMatchObject({ kind: 'RETEFUENTE', amount: 57450, inferred: true });
+    expect(m.withholdings![0].label).toContain('4 %');
+  });
+
+  it('marca diferencia cuando el IVA contabilizado no es el de la factura', () => {
+    const dian = dianWithTax([DIAN_FESI], [272889]);
+    const { ds: ledger } = buildLedgerCompras([
+      ['07/11/2026', '24080301', '806011845', 'ABINTEC SAS', 'FC-351524-0', '', 'IVA DESCONTABLE', '229801', '0'],
+      ['07/11/2026', '23652502', '806011845', 'ABINTEC SAS', 'FC-351524-0', '', 'RETENCION 4%', '0', '57450'],
+      ['07/11/2026', '22050505', '806011845', 'ABINTEC SAS', 'FC-351524-0', 'FESI 880', 'CUENTA POR PAGAR', '0', '1651695'],
+    ]);
+    const r = reconcileDian({ dian: dian.rows, ledger: ledger.rows, config: DEFAULT_DIAN_CONFIG });
+    const m = r.byDian.get(dian.rows[0].id)!;
+    expect(r.dianStatus.get(dian.rows[0].id)).toBe('DIF_VALOR');
+    expect(m.reasons.some((x) => x.code === 'IVA_DIFERENTE')).toBe(true);
+  });
+
+  it('una diferencia que ninguna tarifa explica sigue siendo diferencia de valor', () => {
+    const dian = dianWithTax([DIAN_FESI], [272889]);
+    const { ds: ledger } = buildLedgerCompras([
+      ['07/11/2026', '22050505', '806011845', 'ABINTEC SAS', 'FC-351524-0', 'FESI 880', 'CUENTA POR PAGAR', '0', '1600000'],
+    ]);
+    const r = reconcileDian({ dian: dian.rows, ledger: ledger.rows, config: DEFAULT_DIAN_CONFIG });
+    expect(r.dianStatus.get(dian.rows[0].id)).toBe('DIF_VALOR');
+    expect(r.byDian.get(dian.rows[0].id)!.withholdings).toHaveLength(0);
+  });
+});
+
+describe('Makro: NIT con DV pegado y folio en la descripción', () => {
+  it('concilia con el número de factura completo dentro de la descripción', () => {
+    const { ds: dian } = buildDian([['900059238', 'MAKRO SUPERMAYORISTA S.A.S', '10FT', '142334721', '02/11/2026', '2043756', 'Validado']]);
+    const { ds: ledger } = buildLedgerCompras([
+      ['03/11/2026', '22050505', '9000592385', 'MAKRO SUPERMAYORISTAS S.A.', 'FC-351020-0', '', 'CUENTA POR PAGAR, FACTURA: 10FT-142334721, DO: null', '0', '2043756'],
+    ]);
+    const r = reconcileDian({ dian: dian.rows, ledger: ledger.rows, config: DEFAULT_DIAN_CONFIG });
+    expect(r.dianStatus.get(dian.rows[0].id)).toBe('CONCILIADO');
+  });
+
+  it('muestra el NIT de empresa con DV pegado en el formato correcto', async () => {
+    const { formatNit } = await import('../src/core/normalize/nit');
+    expect(formatNit('9000592385')).toBe('900.059.238-5');
+    expect(formatNit('806011845')).toBe('806.011.845-8');
+    expect(formatNit('1047473400')).not.toBe('104.747.340-0'); // cédula de 10 dígitos: no se parte
+  });
+});
+
+describe('cobertura del comprobante', () => {
+  it('las líneas de IVA y retención de una factura cruzada no quedan "sin soporte DIAN"', () => {
+    const raw = sheet([...DIAN_HEADERS, 'IVA'], [['806011845', 'ABINTEC SAS', 'FESI', '880', '03/11/2026', '1709145', 'Validado', 272889]], 'dian.xlsx');
+    const dian = buildDianDataset(raw, detectMapping(raw, 'dian').mapping);
+    const { ds: ledger } = buildLedgerCompras([
+      ['07/11/2026', '24080301', '806011845', 'ABINTEC SAS', 'FC-351524-0', '', 'IVA DESCONTABLE', '272889', '0'],
+      ['07/11/2026', '23652502', '806011845', 'ABINTEC SAS', 'FC-351524-0', '', 'RETENCION 4%', '0', '57450'],
+      ['07/11/2026', '22050505', '806011845', 'ABINTEC SAS', 'FC-351524-0', 'FESI 880', 'CUENTA POR PAGAR', '0', '1651695'],
+    ]);
+    const r = reconcileDian({ dian: dian.rows, ledger: ledger.rows, config: DEFAULT_DIAN_CONFIG });
+    expect(r.unmatchedLedger).toHaveLength(0);
+    for (const l of ledger.rows) expect(r.ledgerStatus.get(l.id)).toBe('CONCILIADO');
+  });
+});

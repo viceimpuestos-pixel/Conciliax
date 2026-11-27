@@ -69,8 +69,14 @@ export function nitEquals(a: unknown, b: unknown): boolean {
 
 /** Formato de presentación: 900.123.456-7 */
 export function formatNit(input: unknown): string {
-  const { base, dv } = parseNit(input);
+  let { base, dv } = parseNit(input);
   if (!base) return '—';
+  // NIT de empresa (9 dígitos, empieza por 8 o 9) con el DV pegado:
+  // "9000592385" -> 900.059.238-5, no 9.000.592.385-8.
+  if (!dv && base.length === 10 && /^[89]/.test(base) && String(calcDV(base.slice(0, 9))) === base.slice(-1)) {
+    dv = base.slice(-1);
+    base = base.slice(0, 9);
+  }
   const grouped = base.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
   const check = dv ?? (base.length >= 8 ? String(calcDV(base) ?? '') : '');
   return check ? grouped + '-' + check : grouped;

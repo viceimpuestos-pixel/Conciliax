@@ -727,7 +727,49 @@ function DianDocDetail({
                 <tr><td>Valor</td><td>{formatMoney(Math.abs(matchedLedger.amount))}</td></tr>
               </tbody>
             </table>
-          ) : (
+          ) : null}
+          {matchedLedger && match && (match.withholdings?.length || (match.ledgerIva !== undefined && match.ledgerIva !== null)) ? (
+            <>
+              <h4 className="mb-8 mt-16">Impuestos de la factura</h4>
+              <table className="mini-table">
+                <tbody>
+                  <tr><td>Total factura DIAN (base + IVA)</td><td className="tnum">{formatMoney(doc.amount)}</td></tr>
+                  {match.withholdings?.map((w, i) => (
+                    <tr key={i}>
+                      <td>
+                        − {w.label}
+                        <div className="cell-sub">{w.inferred ? 'Deducida por tarifa: verifíquela en el comprobante' : 'Cuenta ' + w.account}</div>
+                      </td>
+                      <td className="tnum">{formatMoney(w.amount)}</td>
+                    </tr>
+                  ))}
+                  {!!match.withholdings?.length && (
+                    <tr>
+                      <td><strong>= Valor neto esperado</strong></td>
+                      <td className="tnum"><strong>{formatMoney(doc.amount - match.withholdings.reduce((a, w) => a + w.amount, 0))}</strong></td>
+                    </tr>
+                  )}
+                  {!!match.withholdings?.length && (
+                    <tr>
+                      <td>Valor contabilizado ({matchedLedger.accountCode})</td>
+                      <td className="tnum">
+                        {formatMoney(Math.abs(matchedLedger.amount))} {Math.abs(match.amountDiff) <= 0.01 ? '✓' : '· dif. ' + formatMoney(match.amountDiff)}
+                      </td>
+                    </tr>
+                  )}
+                  {match.ledgerIva !== undefined && match.ledgerIva !== null && (
+                    <tr>
+                      <td>IVA contabilizado (2408) vs. IVA factura</td>
+                      <td className="tnum">
+                        {formatMoney(match.ledgerIva)} {Math.abs(match.ledgerIva - doc.tax) <= 1 ? '✓' : '≠ ' + formatMoney(doc.tax)}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </>
+          ) : null}
+          {matchedLedger ? null : (
             <>
               <EmptyState icon={<IconAlert size={20} />} title="Sin registro contable" description="No se encontró un movimiento en el auxiliar para este documento." />
               <div className="mt-12">
