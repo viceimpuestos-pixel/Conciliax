@@ -386,11 +386,35 @@ export interface DianMatch {
   score: number;
   status: DianMatchStatus;
   reasons: DianMatchReason[];
-  /** dian.amount - ledger.amount */
+  /**
+   * Diferencia que queda después de descontar las retenciones del total DIAN
+   * (dian.amount − retenciones − |ledger.amount|). Sin retenciones, es la
+   * diferencia directa.
+   */
   amountDiff: number;
   daysDiff: number | null;
   origin: 'auto' | 'manual';
   explanation: string;
+  /**
+   * Retenciones que explican la diferencia entre el total de la factura
+   * (base + IVA) y la cuenta por pagar / por cobrar contabilizada.
+   */
+  withholdings?: DianWithholding[];
+  /** dian.amount − |ledger.amount| antes de descontar retenciones. */
+  grossDiff?: number;
+  /** IVA contabilizado en el comprobante (cuentas 2408), si el auxiliar lo trae. */
+  ledgerIva?: number | null;
+}
+
+export interface DianWithholding {
+  kind: 'RETEFUENTE' | 'RETEIVA' | 'RETEICA';
+  /** "Retención en la fuente 4 %" */
+  label: string;
+  amount: number;
+  /** Cuenta contable de donde salió (si viene del comprobante). */
+  account?: string;
+  /** true = deducida por tarifa (el auxiliar no trae la línea de la retención). */
+  inferred: boolean;
 }
 
 export interface DianReconciliationResult {
